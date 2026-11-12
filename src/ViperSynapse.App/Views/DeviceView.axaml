@@ -84,6 +84,8 @@
                     <Border DockPanel.Dock="Top" Height="1" Background="#2A2A2A" />
                     <ScrollViewer>
                         <StackPanel Margin="0,0,0,10">
+                            <TextBlock Text="{Binding GenericControlsStatus}" IsVisible="{Binding UsingGenericControls}"
+                                       TextWrapping="Wrap" Margin="12,8" FontSize="11" />
                             <ItemsControl ItemsSource="{Binding KeyLines}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:KeyListLine">

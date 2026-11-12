@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -75,9 +76,47 @@ public sealed partial class ShortcutsViewModel(MainViewModel main) : ObservableO
     public IEnumerable<DeviceViewModel> Devices => main.Devices;
 
     /// <summary>The chosen device's keys that can be part of a shortcut.</summary>
-    public IReadOnlyList<DeviceKey> KeyChoices => EditDevice?.Rows.Where(r => r.Bindable).Select(r => r.Key).ToList() ?? [];
+    public IReadOnlyList<DeviceKey> KeyChoices => EditDevice?.Rows.Where(r => r.Bindable && !SourceKeys.IsWheel(r.Key.Source)).Select(r => r.Key).ToList() ?? [];
 
-    partial void OnEditDeviceChanged(DeviceViewModel? value) => OnPropertyChanged(nameof(KeyChoices));
+    partial void OnEditDeviceChanged(DeviceViewModel? oldValue, DeviceViewModel? newValue)
+    {
+        if (oldValue != null) oldValue.PropertyChanged -= DeviceChanged;
+        if (newValue != null) newValue.PropertyChanged += DeviceChanged;
+        RefreshKeyChoices();
+    }
+
+    void DeviceChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(DeviceViewModel.Rows))
+            RefreshKeyChoices();
+    }
+
+    void RefreshKeyChoices()
+    {
+        var choices = KeyChoices;
+        var selected = new[] { Key1, Key2, Key3 };
+        if (Editing && selected.OfType<DeviceKey>().Any(key => !choices.Any(choice => choice.Source == key.Source)))
+        {
+            // Clearing only the missing key could silently turn a three-key shortcut into a two-key one.
+            Key1 = Key2 = Key3 = null;
+            Problem = "Device controls changed. Please select the shortcut keys again before saving.";
+        }
+        else
+        {
+            Key1 = choices.FirstOrDefault(k => k.Source == Key1?.Source);
+            Key2 = choices.FirstOrDefault(k => k.Source == Key2?.Source);
+            Key3 = choices.FirstOrDefault(k => k.Source == Key3?.Source);
+        }
+        OnPropertyChanged(nameof(KeyChoices));
+    }
+
+    internal void DevicesUpdated()
+    {
+        if (EditDevice != null && !main.Devices.Contains(EditDevice))
+            EditDevice = null;
+        OnPropertyChanged(nameof(Devices));
+        OnPropertyChanged(nameof(KeyChoices));
+    }
 
     [RelayCommand]
     void Add() => Open(null, [], new KeyboardBinding(0));
@@ -96,15 +135,21 @@ public sealed partial class ShortcutsViewModel(MainViewModel main) : ObservableO
     void Open(Guid? id, IReadOnlyList<ushort> keys, Binding binding)
     {
         _editing = id;
-        Problem = null;
         OnPropertyChanged(nameof(Devices));
         // The device whose keys these are, else the first one.
-        EditDevice = main.Devices.FirstOrDefault(d => keys.Count > 0 && keys.All(k => d.Rows.Any(r => r.Key.Source == k)))
+        EditDevice = main.Devices.FirstOrDefault(d => keys.Count > 0 &&
+            keys.All(k => !SourceKeys.IsWheel(k) && d.Rows.Any(r => r.Bindable && r.Key.Source == k)))
                      ?? main.Devices.FirstOrDefault();
+        Problem = null;
         DeviceKey? Pick(int i) => i < keys.Count ? KeyChoices.FirstOrDefault(k => k.Source == keys[i]) : null;
         Key1 = Pick(0);
         Key2 = Pick(1);
         Key3 = Pick(2);
+        if (keys.Any(k => !KeyChoices.Any(choice => choice.Source == k)))
+        {
+            Key1 = Key2 = Key3 = null;
+            Problem = "Some saved keys are unavailable. Please select the shortcut keys again before saving.";
+        }
         var row = new KeyRowViewModel(new DeviceKey(0, "Shortcut", 0, 0, "other", 0));
         Editor = new BindingEditorViewModel(row, binding, main.MacroLibrary, [], 8, (_, b) => Save(b), Close,
             id == null ? "NEW SHORTCUT" : "EDIT SHORTCUT");
@@ -140,6 +185,7 @@ public sealed partial class ShortcutsViewModel(MainViewModel main) : ObservableO
     {
         Editing = false;
         Editor = null;
+        EditDevice = null;
         _editing = null;
     }
 }

@@ -192,6 +192,7 @@ public sealed partial class MainViewModel : ObservableObject
             Home.Devices.Clear();
             foreach (var tab in Devices)
                 Home.Devices.Add(tab);
+            Home.Shortcuts.DevicesUpdated();
             OpenRequested();
         });
     }

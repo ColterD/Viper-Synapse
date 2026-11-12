@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Engine;
 using ViperSynapse.Hardware.Linux;
@@ -73,32 +74,38 @@ public sealed class DeviceSession : IDisposable
     /// <param name="engine">Where its keys go.</param>
     /// <param name="stick">Analog leaves the keypad's gamepad node to the system; 4-way and 8-way take it over and
     /// turn the stick into direction presses.</param>
-    public static DeviceSession Start(IEnumerable<string> nodePaths, RemapEngine engine, ThumbstickMode stick = ThumbstickMode.Analog)
+    /// <param name="onNodeLost">Optional failure handler registered before any reader thread starts.</param>
+    public static DeviceSession Start(IEnumerable<string> nodePaths, RemapEngine engine, ThumbstickMode stick = ThumbstickMode.Analog,
+        Action<DeviceSession, string, Exception>? onNodeLost = null)
     {
         var session = new DeviceSession(engine, stick);
+        // Register before readers start: a node can fail before Start returns to the caller.
+        if (onNodeLost != null)
+            session.NodeLost += (path, error) => onNodeLost(session, path, error);
         try
         {
             foreach (var path in nodePaths)
             {
                 var node = EvdevDevice.Open(path);
-                var keys = node.Capabilities(EventTypes.Key);
+                // Own the descriptor immediately: capability queries and grabs can fail too.
+                session._nodes.Add(node);
+                var keys = node.Capabilities(EventTypes.Key, true);
                 bool gamepad = keys.Any(Core.Input.KeyCodes.IsJoystickButton);
-                if (gamepad && stick != ThumbstickMode.Analog && node.Capabilities(EventTypes.Abs).Count > 0)
+                if (gamepad && stick != ThumbstickMode.Analog && node.Capabilities(EventTypes.Abs, true).Count > 0)
                 {
                     GrabIfIdle(node);
-                    session._nodes.Add(node);
                     session._stickNodes.Add(node.Path);
                     continue;
                 }
                 // Otherwise gamepad and joystick nodes (the Tartarus V2 Pro's analog mode) carry axes the engine does
                 // not pass on: grabbing one would freeze its sticks. They are left to the system.
-                if (keys.Count == 0 && node.Capabilities(EventTypes.Rel).Count == 0 || gamepad)
+                if (keys.Count == 0 && node.Capabilities(EventTypes.Rel, true).Count == 0 || gamepad)
                 {
                     node.Dispose();
+                    session._nodes.Remove(node);
                     continue;
                 }
                 GrabIfIdle(node);
-                session._nodes.Add(node);
             }
             foreach (var node in session._nodes)
             {
@@ -108,9 +115,10 @@ public sealed class DeviceSession : IDisposable
             }
             return session;
         }
-        catch
+        catch (Exception error)
         {
-            session.Dispose();
+            try { session.Dispose(); }
+            catch (Exception cleanup) { error.Data["DeviceSessionCleanupFailure"] = cleanup; }
             throw;
         }
     }
@@ -123,10 +131,17 @@ public sealed class DeviceSession : IDisposable
     {
         lock (_engineGate)
         {
+            Exception? failure = null;
             foreach (var (source, _) in _stick.Release())
-                Engine.Key(source, 0);
-            Engine.Reset();
+            {
+                try { Engine.Key(source, 0); }
+                catch (Exception error) { failure ??= error; }
+            }
+            try { Engine.Reset(); }
+            catch (Exception error) { failure ??= error; }
             Engine.Keymap = keymap;
+            if (failure != null)
+                ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
 
@@ -134,7 +149,8 @@ public sealed class DeviceSession : IDisposable
     public void WithEngine(Action<RemapEngine> action)
     {
         lock (_engineGate)
-            action(Engine);
+            if (!_stopping)
+                action(Engine);
     }
 
     /// <summary>Takes the node now unless one of its keys or buttons is down. Grabbing mid-press splits the press
@@ -183,6 +199,9 @@ public sealed class DeviceSession : IDisposable
                 bool stick = _stickNodes.Contains(node.Path);
                 lock (_engineGate)
                 {
+                    // A read can finish just as Dispose starts; do not emit after its final reset.
+                    if (_stopping)
+                        break;
                     for (int i = 0; i < n; i++)
                     {
                         if (stick)
@@ -250,13 +269,26 @@ public sealed class DeviceSession : IDisposable
     public void Dispose()
     {
         _stopping = true;
-        lock (_engineGate)
-            Engine.Reset();
+        Exception? failure = null;
+        try
+        {
+            lock (_engineGate)
+                Engine.Reset();
+        }
+        catch (Exception error) { failure = error; }
         // Readers wake from poll within 100 ms and see the flag; only then are the nodes closed, so no
         // read can land on a descriptor number the process has already reused.
         foreach (var thread in _threads)
-            thread.Join();
+        {
+            try { thread.Join(); }
+            catch (Exception error) { failure ??= error; }
+        }
         foreach (var node in _nodes)
-            node.Dispose();
+        {
+            try { node.Dispose(); }
+            catch (Exception error) { failure ??= error; }
+        }
+        if (failure != null)
+            ExceptionDispatchInfo.Capture(failure).Throw();
     }
 }

@@ -10,13 +10,13 @@ using ViperSynapse.Core.Input;
 namespace ViperSynapse.App.ViewModels;
 
 /// <summary>One row of the key list: the key's number and what it does now.</summary>
-public sealed partial class KeyRowViewModel(DeviceKey key) : ObservableObject
+public sealed partial class KeyRowViewModel(DeviceKey key, bool bindingAvailable = true) : ObservableObject
 {
     public DeviceKey Key { get; } = key;
-    public string Number => Key.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public string Number => Key.Group == "linux input" ? "" : Key.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Controls with no key of their own (the Tartarus's Hypershift button) are handled by the device.</summary>
-    public bool Bindable => Key.Source != 0;
+    public bool Bindable => Key.Source != 0 && bindingAvailable;
 
     /// <summary>Set on the first key of each group: the list shows it as a heading (KEYPAD, OTHER, SIDE BUTTONS).</summary>
     public string? GroupTitle { get; set; }
@@ -25,7 +25,8 @@ public sealed partial class KeyRowViewModel(DeviceKey key) : ObservableObject
     public partial string Category { get; set; } = "";
 
     /// <summary>The list's shorter caption: KEYBOARD, not KEYBOARD FUNCTION, as Synapse 4 prints it there.</summary>
-    public string ListCategory => Category.EndsWith(" FUNCTION", StringComparison.Ordinal) ? Category[..^" FUNCTION".Length] : Category;
+    public string ListCategory => Key.Group == "linux input" ? Key.Label :
+        Category.EndsWith(" FUNCTION", StringComparison.Ordinal) ? Category[..^" FUNCTION".Length] : Category;
 
     partial void OnCategoryChanged(string value) => OnPropertyChanged(nameof(ListCategory));
 
@@ -71,18 +72,17 @@ public sealed partial class DeviceViewModel : TabViewModel
     readonly MainViewModel _main;
     DeviceSettings _settings = DeviceSettings.Create();
     bool _loading;
+    bool _controlsReady;
+    IReadOnlyList<ushort> _lastInputControls = [];
+    string? _lastInputControlsStatus;
 
     public DeviceViewModel(DeviceInfo info, MainViewModel main)
     {
         _main = main;
         Info = info;
         Model = DeviceCatalogue.Default.Find(Convert.ToUInt16(info.ProductId, 16));
-        Rows = (Model?.Keys ?? []).Select(k => new KeyRowViewModel(k)).ToList();
-        Groups = Rows.GroupBy(r => r.Key.Group).Select(g => new KeyGroup(GroupTitle(g.Key), g.ToList())).ToList();
-        foreach (var group in Groups)
-            group.Keys[0].GroupTitle = group.Title;
-        KeyFilters = ["All Buttons", .. Groups.Select(g => FilterName(g.Title))];
-        SelectedKeyFilter = KeyFilters[0];
+        RebuildControls();
+        _controlsReady = true;
         if (Model?.Has("keypad_buttons") == true)
             FirmwareButtons = [new("RAZER HYPERSHIFT", "Razer Hypershift"), new("SWITCH KEYMAP", "Cycle Keymap"), new("SWITCH PROFILE", "Cycle Profile")];
         else
@@ -129,7 +129,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     [ObservableProperty]
     public partial bool ShowPhoto { get; set; }
 
-    public bool ShowDrawing => !ShowPhoto || Photo == null;
+    public bool ShowDrawing => !UsingGenericControls && (!ShowPhoto || Photo == null);
 
     partial void OnShowPhotoChanged(bool value) => OnPropertyChanged(nameof(ShowDrawing));
 
@@ -173,11 +173,47 @@ public sealed partial class DeviceViewModel : TabViewModel
     public string ShortName => (Model?.Name ?? Info.Name).Replace("Razer ", "", StringComparison.Ordinal);
     public bool IsKeypad => Model?.Type == "keypad";
 
-    public IReadOnlyList<KeyRowViewModel> Rows { get; }
-    public IReadOnlyList<KeyGroup> Groups { get; }
+    public IReadOnlyList<KeyRowViewModel> Rows { get; private set; } = [];
+    public IReadOnlyList<KeyGroup> Groups { get; private set; } = [];
 
     /// <summary>The key list's "All Buttons" box: everything, or one group.</summary>
-    public IReadOnlyList<string> KeyFilters { get; }
+    public IReadOnlyList<string> KeyFilters { get; private set; } = [];
+
+    public bool UsingGenericControls => Model?.Keys.Count is null or 0;
+
+    public string GenericControlsStatus => Info.InputControlsStatus switch
+    {
+        "available" when (Info.InputControls?.Count ?? 0) == 0 => "This device advertises no compatible keyboard or mouse controls.",
+        "available" => "Linux input controls advertised by this device; physical locations and firmware buttons are not identified.",
+        "partial" => "Some input nodes could not be read. Remapping is unavailable until device access is fixed; this list may be incomplete.",
+        "permission" => "Cannot read the device's input controls. Check device access permissions.",
+        _ => "Device input controls are unavailable. Reconnect the device and check access permissions.",
+    };
+
+    void RebuildControls()
+    {
+        _lastInputControls = (Info.InputControls ?? []).ToArray();
+        _lastInputControlsStatus = Info.InputControlsStatus;
+        IReadOnlyList<DeviceKey> keys = Model?.Keys ?? [];
+        if (keys.Count == 0)
+            keys = (Info.InputControls ?? []).Distinct().Select(source => new DeviceKey(
+                0, source switch
+                {
+                    SourceKeys.WheelUp => "REL_WHEEL_UP", SourceKeys.WheelDown => "REL_WHEEL_DOWN",
+                    SourceKeys.WheelLeft => "REL_HWHEEL_LEFT", SourceKeys.WheelRight => "REL_HWHEEL_RIGHT",
+                    _ => KeyCodes.Name(source),
+                }, SourceKeys.IsWheel(source) ? (ushort)0 : source, 0, "linux input", source)).ToList();
+        Rows = keys.Select(k => new KeyRowViewModel(k, !UsingGenericControls || Info.InputControlsStatus == "available")).ToList();
+        Groups = Rows.GroupBy(r => r.Key.Group).Select(g => new KeyGroup(GroupTitle(g.Key), g.ToList())).ToList();
+        foreach (var group in Groups)
+            group.Keys[0].GroupTitle = group.Title;
+        KeyFilters = ["All Buttons", .. Groups.Select(g => FilterName(g.Title))];
+        SelectedKeyFilter = KeyFilters[0];
+        OnPropertyChanged(nameof(Rows));
+        OnPropertyChanged(nameof(Groups));
+        OnPropertyChanged(nameof(KeyFilters));
+        OnPropertyChanged(nameof(KeyLines));
+    }
 
     [ObservableProperty]
     public partial string SelectedKeyFilter { get; set; } = "";
@@ -419,6 +455,14 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         OnPropertyChanged(nameof(Status));
         OnPropertyChanged(nameof(Details));
+        OnPropertyChanged(nameof(GenericControlsStatus));
+        if (_controlsReady && UsingGenericControls &&
+            (_lastInputControlsStatus != value.InputControlsStatus || !_lastInputControls.SequenceEqual(value.InputControls ?? [])))
+        {
+            SelectedKey = null;
+            RebuildControls();
+            RefreshRows();
+        }
     }
 
     IReadOnlyList<string> BuildPages()

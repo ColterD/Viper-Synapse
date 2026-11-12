@@ -23,7 +23,9 @@ public sealed record DeviceInfo(
     string? ControlNode,
     IReadOnlyList<string> InputNodes,
     bool Remapping,
-    string? Problem);
+    string? Problem,
+    IReadOnlyList<ushort>? InputControls = null,
+    string? InputControlsStatus = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]
@@ -66,7 +68,8 @@ public sealed class DeviceManager : IDisposable
     {
         _includeTestDevices = includeTestDevices;
         _store = store;
-        _output = output;
+        // Every device session writes to the same virtual keyboard, so their modifier owners must share state.
+        _output = output is SharedModifierSink ? output : new SharedModifierSink(output);
         _macros = store.LoadMacros();
         _shortcuts = store.LoadShortcuts();
     }
@@ -81,15 +84,45 @@ public sealed class DeviceManager : IDisposable
         public string? ControlNode { get; set; }
         public DeviceIdentity? Identity { get; set; }
         public List<string> InputNodes { get; set; } = [];
-        public RemapEngine? Engine { get; set; }
-        public DeviceSession? Session { get; set; }
+        public IReadOnlyList<ushort> InputControls { get; set; } = [];
+        public string InputControlsStatus { get; set; } = "unavailable";
+        public bool InputFailed { get; set; }
+        int _physicalHypershift;
+        RemapEngine? _engine;
+        public RemapEngine? Engine
+        {
+            get => _engine;
+            set
+            {
+                _engine = value;
+                if (value != null)
+                    value.PhysicalHypershiftHeld = () => Volatile.Read(ref _physicalHypershift) != 0;
+            }
+        }
+        public void SetPhysicalHypershift(bool held) => Volatile.Write(ref _physicalHypershift, held ? 1 : 0);
+        DeviceSession? _session;
+        public DeviceSession? Session { get => Volatile.Read(ref _session); set => Volatile.Write(ref _session, value); }
         public DeviceControl? Control { get; set; }
         public KeypadButtons? Buttons { get; set; }
+        public bool ButtonsStarting { get; set; }
         public ThumbstickMode SessionStick { get; set; }
         public StickMonitor? Monitor { get; set; }
         public DateTime StickWatchedUntil { get; set; }
         public long StickLastSent { get; set; }
         public string? Problem { get; set; }
+        public string? InputProblem { get; set; }
+        public string? ButtonsProblem { get; set; }
+        public string? CleanupProblem { get; set; }
+
+        public string? Problems
+        {
+            get
+            {
+                var problems = new[] { Problem, ButtonsProblem, InputProblem, CleanupProblem }
+                    .Where(p => p != null).ToArray();
+                return problems.Length == 0 ? null : string.Join(" ", problems);
+            }
+        }
     }
 
     public IReadOnlyList<DeviceInfo> Devices
@@ -116,7 +149,9 @@ public sealed class DeviceManager : IDisposable
         d.ControlNode,
         d.InputNodes,
         d.Session != null,
-        d.Problem);
+        d.Problems,
+        d.InputControls,
+        d.InputControlsStatus);
 
     /// <summary>Looks at what is plugged in now: starts new devices, drops the ones that went away.</summary>
     public void Refresh()
@@ -135,7 +170,7 @@ public sealed class DeviceManager : IDisposable
         {
             foreach (var gone in _devices.Keys.Where(port => !ports.ContainsKey(port)).ToList())
             {
-                _devices[gone].Session?.Dispose();
+                StopSession(_devices[gone]);
                 _devices[gone].Control?.Dispose();
                 _devices[gone].Buttons?.Dispose();
                 _devices[gone].Monitor?.Dispose();
@@ -156,8 +191,33 @@ public sealed class DeviceManager : IDisposable
                 {
                     device.InputNodes = nodes;
                     // The device's nodes changed under a running session (a re-plug): start it again.
-                    device.Session?.Dispose();
-                    device.Session = null;
+                    StopSession(device);
+                    device.InputFailed = false;
+                    changed = true;
+                }
+            }
+        }
+
+        // Capability discovery only opens nodes and queries their event bits; it never grabs or reads keys.
+        // Run it outside the device lock and discard results if the nodes changed in the meantime.
+        List<(Connected Device, string[] Nodes)> discover;
+        lock (_gate)
+            discover = _devices.Values.Where(d => d.Model?.Keys.Count is null or 0)
+                .Select(d => (d, d.InputNodes.ToArray())).ToList();
+        foreach (var (device, nodes) in discover)
+        {
+            var found = InputControlDiscovery.Read(nodes);
+            lock (_gate)
+            {
+                if (!_devices.TryGetValue(device.Port, out var current) || current != device || !nodes.SequenceEqual(device.InputNodes))
+                    continue;
+                if (device.InputControlsStatus != found.Status || !device.InputControls.SequenceEqual(found.Controls))
+                {
+                    // A permission recovery is a meaningful reason to allow a retry.
+                    if (found.Status == "available" && device.InputControlsStatus != "available")
+                        device.InputFailed = false;
+                    device.InputControls = found.Controls;
+                    device.InputControlsStatus = found.Status;
                     changed = true;
                 }
             }
@@ -207,12 +267,21 @@ public sealed class DeviceManager : IDisposable
         lock (_gate)
             keys = _devices.Values.Select(d => d.Key).Distinct().ToList();
         foreach (var key in keys)
-            Apply(key);
+            Apply(key, refreshing: true);
         if (changed)
             DevicesChanged?.Invoke();
     }
 
     bool Real(string port) => _includeTestDevices || !port.StartsWith(TestPortPrefix, StringComparison.Ordinal);
+
+    internal static bool ShortcutMatchesControls(DeviceModel? model, IReadOnlyList<ushort> controls, string status, IReadOnlyList<ushort> keys)
+    {
+        if (keys.Count == 0 || keys.Any(SourceKeys.IsWheel))
+            return false;
+        if (model?.Keys.Count > 0)
+            return keys.All(k => model.Keys.Any(dk => dk.Source == k));
+        return status == "available" && keys.All(controls.Contains);
+    }
 
     public DeviceSettings GetSettings(string key) => _store.LoadDevice(key);
 
@@ -233,22 +302,18 @@ public sealed class DeviceManager : IDisposable
         SettingsChanged?.Invoke(key);
     }
 
-    public MacroLibrary Macros
-    {
-        get { lock (_gate) return _macros; }
-    }
+    // Input threads hold the session lock while reading these replaced snapshots. Do not
+    // take _gate here: session changes hold _gate while waiting for that same session lock.
+    public MacroLibrary Macros => Volatile.Read(ref _macros);
 
     public void SetMacros(MacroLibrary macros)
     {
         _store.SaveMacros(macros);
         lock (_gate)
-            _macros = macros;
+            Volatile.Write(ref _macros, macros);
     }
 
-    public ShortcutList Shortcuts
-    {
-        get { lock (_gate) return _shortcuts; }
-    }
+    public ShortcutList Shortcuts => Volatile.Read(ref _shortcuts);
 
     /// <summary>New shortcuts can mean a device must now be grabbed (or need not be any more): every model is
     /// applied again.</summary>
@@ -258,7 +323,7 @@ public sealed class DeviceManager : IDisposable
         List<string> keys;
         lock (_gate)
         {
-            _shortcuts = shortcuts;
+            Volatile.Write(ref _shortcuts, shortcuts);
             keys = _devices.Values.Select(d => d.Key).Distinct().ToList();
         }
         foreach (var key in keys)
@@ -266,7 +331,9 @@ public sealed class DeviceManager : IDisposable
     }
 
     /// <summary>Brings every connected device of a model in line with its stored settings.</summary>
-    public void Apply(string key)
+    public void Apply(string key) => Apply(key, refreshing: false);
+
+    void Apply(string key, bool refreshing)
     {
         var settings = _store.LoadDevice(key);
         var keymap = settings.ActiveKeymapOrFirst;
@@ -277,31 +344,62 @@ public sealed class DeviceManager : IDisposable
         {
             foreach (var device in _devices.Values.Where(d => d.Key == key))
             {
+                // A failed reader must not be grabbed again on unrelated filesystem scans. Explicit
+                // settings changes, changed nodes or recovered permissions permit another attempt.
+                if (refreshing && device.InputFailed)
+                    continue;
+                if (!refreshing)
+                    device.InputFailed = false;
                 // A thumbstick in 4-way or 8-way mode types its directions even with nothing bound.
                 var stick = device.Model?.Has("thumbstick") == true ? profile.Thumbstick : ThumbstickMode.Analog;
                 // A global shortcut made of this device's keys needs its input too.
-                bool shortcut = _shortcuts.Shortcuts.Any(s => device.Model is not { } m || s.Keys.All(k => m.Keys.Any(dk => dk.Source == k)));
+                bool shortcut = _shortcuts.Shortcuts.Any(s => ShortcutMatchesControls(device.Model, device.InputControls, device.InputControlsStatus, s.Keys));
+                if (refreshing && device.Session != null && _shortcuts.Shortcuts.Count > 0 &&
+                    (device.Model?.Keys.Count is null or 0) && device.InputControlsStatus != "available")
+                    shortcut = true;
                 // A faster wheel is the engine's work too.
                 int scrollLines = Math.Clamp(profile.Scroll?.LinesPerNotch ?? 1, 1, Core.Lighting.ScrollSettings.MaxLinesPerNotch);
                 if (!bindsAnything && !shortcut && scrollLines <= 1 && stick == ThumbstickMode.Analog)
                 {
                     if (device.Session != null)
                     {
-                        device.Session.Dispose();
-                        device.Session = null;
+                        StopSession(device);
                         changed = true;
                     }
                     continue;
                 }
                 if (device.Session != null && device.SessionStick == stick)
                 {
-                    device.Session.Apply(keymap);
-                    device.Session.WithEngine(e => (e.Interruption, e.ScrollLines) = (profile.Interruption, scrollLines));
+                    try
+                    {
+                        UpdateSession(device.Session, keymap, profile.Interruption, scrollLines, refreshing);
+                        if (!refreshing && device.InputProblem?.StartsWith("Could not update the device's keys: ", StringComparison.Ordinal) == true)
+                        {
+                            bool recovered = false;
+                            device.Session.WithEngine(engine => recovered = engine.TryConfirmOutputRecovery());
+                            if (recovered)
+                            {
+                                device.InputProblem = null;
+                                changed = true;
+                            }
+                        }
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException or ThreadStateException)
+                    {
+                        device.InputProblem = "Could not update the device's keys: " + e.Message;
+                        Console.Error.WriteLine($"{device.Key}: {device.InputProblem}");
+                        changed = true;
+                    }
                     continue;
                 }
                 // A new stick mode takes over (or gives back) a different set of nodes: start again.
-                device.Session?.Dispose();
-                device.Session = null;
+                StopSession(device);
+                if (device.InputNodes.Count == 0)
+                {
+                    device.InputProblem = "No input nodes are available. Reconnect the device or check its permissions.";
+                    changed = true;
+                    continue;
+                }
                 var model = device.Model;
                 device.Engine = new RemapEngine(_output, new Host(this, key))
                 {
@@ -312,7 +410,13 @@ public sealed class DeviceManager : IDisposable
                 };
                 try
                 {
-                    device.Session = DeviceSession.Start(device.InputNodes, device.Engine, stick);
+                    device.Session = DeviceSession.Start(device.InputNodes, device.Engine, stick, (failed, path, error) =>
+                        ThreadPool.QueueUserWorkItem(_ =>
+                        {
+                            if (!RetireFailedSession(device, failed, path, error))
+                                return;
+                            DevicesChanged?.Invoke();
+                        }));
                     var watched = device;
                     device.Session.StickMoved += (x, y) => SendStick(watched, x, y);
                     device.Session.KeyPressed += source => watched.Control?.Press(source);
@@ -323,12 +427,12 @@ public sealed class DeviceManager : IDisposable
                         device.Monitor = null;
                     }
                     device.SessionStick = stick;
-                    device.Session.NodeLost += (_, _) => ThreadPool.QueueUserWorkItem(_ => Refresh());
-                    device.Problem = null;
+                    if (IsInputSessionProblem(device.InputProblem))
+                        device.InputProblem = null;
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
-                    device.Problem = "Could not take over the device's keys: " + e.Message;
+                    device.InputProblem = "Could not take over the device's keys: " + e.Message;
                 }
                 changed = true;
             }
@@ -347,33 +451,183 @@ public sealed class DeviceManager : IDisposable
             DevicesChanged?.Invoke();
     }
 
+    internal static void UpdateSession(DeviceSession session, Keymap keymap, MacroInterruption interruption, int scrollLines, bool refreshing)
+    {
+        // A device scan can be triggered by an unrelated udev permission change. Do not release held
+        // keys or stop background actions when the existing session needs no new keymap.
+        try
+        {
+            if (!refreshing)
+                session.Apply(keymap);
+        }
+        finally
+        {
+            session.WithEngine(e => (e.Interruption, e.ScrollLines) = (interruption, scrollLines));
+        }
+    }
+
+    static bool IsInputSessionProblem(string? problem) => problem != null &&
+        (problem.StartsWith("Input stopped on ", StringComparison.Ordinal) ||
+         problem.StartsWith("Could not take over the device's keys: ", StringComparison.Ordinal) ||
+         problem.StartsWith("Could not update the device's keys: ", StringComparison.Ordinal) ||
+         problem.StartsWith("No input nodes are available.", StringComparison.Ordinal));
+
+    bool RetireFailedSession(Connected device, DeviceSession failed, string path, Exception error)
+    {
+        lock (_gate)
+        {
+            // A delayed notification must not stop a replacement session or a reconnected device.
+            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Session != failed)
+                return false;
+            StopSession(device);
+            device.InputFailed = true;
+            device.InputProblem = $"Input stopped on {path}: {error.Message}. Reconnect the device or change its settings to retry.";
+            Console.Error.WriteLine($"{device.Key}: {device.InputProblem}");
+            return true;
+        }
+    }
+
+    static void StopSession(Connected device)
+    {
+        var session = device.Session;
+        device.Session = null;
+        if (session == null)
+            return;
+        // A replacement engine cannot verify the old engine's cancelled background cleanup. Preserve
+        // any unresolved update warning independently before a later start replaces the input status.
+        if (device.InputProblem?.StartsWith("Could not update the device's keys: ", StringComparison.Ordinal) == true)
+        {
+            device.CleanupProblem = device.CleanupProblem == null ? device.InputProblem : $"{device.CleanupProblem} {device.InputProblem}";
+            device.InputProblem = null;
+        }
+        try
+        {
+            session.Dispose();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException or ThreadStateException)
+        {
+            string problem = "Could not release the device's keys: " + e.Message;
+            device.CleanupProblem = device.CleanupProblem == null ? problem : $"{device.CleanupProblem} {problem}";
+            Console.Error.WriteLine($"{device.Key}: {problem}");
+        }
+    }
+
     /// <summary>Listens to a keypad's own buttons: Hypershift held switches the engine's layer, the keymap button moves
     /// the profile to that keymap.</summary>
-    void StartButtons(Connected device, HidrawNode? node)
+    void StartButtons(Connected device, HidrawNode? node) => StartButtonsUsing(device, node, KeypadButtons.Start);
+
+    void StartButtonsUsing(Connected device, HidrawNode? node,
+        Func<string, Action<bool>, Action<int>, Action<KeypadButtons>, KeypadButtons> start)
     {
         if (node == null)
             return;
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Buttons != null || device.ButtonsStarting)
+                return;
+            device.ButtonsStarting = true;
+            device.SetPhysicalHypershift(false);
+        }
+        var published = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        KeypadButtons? buttons = null;
+        bool listenerPublished = false;
+        bool disposeAttempted = false;
         try
         {
-            var buttons = KeypadButtons.Start(node.DevicePath);
-            buttons.Hypershift += held =>
+            // The listener can be joined while _gate is held. Keep the firmware state independently of any
+            // session, so reports during a session restart are also visible to the next engine. Register
+            // handlers before the reader starts, so the first report or an immediate exit is not lost.
+            buttons = start(node.DevicePath,
+                device.SetPhysicalHypershift,
+                keymap => _ = Task.Run(async () =>
+                {
+                    if (await published.Task.ConfigureAwait(false))
+                        HandleKeymapReport(device, buttons!, keymap);
+                }),
+                stopped => _ = Task.Run(async () =>
+                {
+                    if (await published.Task.ConfigureAwait(false))
+                        RetireStoppedButtons(device, stopped);
+                }));
+            bool accepted;
+            lock (_gate)
             {
-                DeviceSession? session;
-                lock (_gate)
-                    session = device.Session;
-                session?.WithEngine(e => e.HypershiftButton(held));
-            };
-            buttons.KeymapSelected += keymap => ThreadPool.QueueUserWorkItem(_ =>
+                device.ButtonsStarting = false;
+                accepted = _devices.TryGetValue(device.Port, out var current) && current == device && device.Buttons == null;
+                if (accepted)
+                    device.Buttons = buttons;
+            }
+            listenerPublished = accepted;
+            published.TrySetResult(accepted);
+            if (!accepted)
             {
-                device.Control?.KeymapChangedOnDevice(keymap - 1);
-                FollowDeviceKeymap(device.Key, keymap - 1);
-            });
-            device.Buttons = buttons;
+                disposeAttempted = true;
+                buttons.Dispose(); // Never join an orphan listener while holding the manager lock.
+            }
         }
-        catch (IOException e)
+        catch (Exception e)
         {
+            published.TrySetResult(false);
+            bool notify = false;
+            lock (_gate)
+            {
+                if (!listenerPublished)
+                    device.ButtonsStarting = false;
+                if (e is IOException && _devices.TryGetValue(device.Port, out var current) && current == device)
+                {
+                    device.ButtonsProblem = "Cannot listen to the keypad's buttons: " + e.Message;
+                    notify = true;
+                }
+            }
+            if (!listenerPublished && buttons != null && !disposeAttempted)
+            {
+                try { buttons.Dispose(); }
+                catch (Exception cleanup) { e.Data["KeypadButtonsCleanupFailure"] = cleanup; }
+            }
+            if (e is not IOException)
+                throw;
             Console.Error.WriteLine($"{device.Key}: cannot listen to the keypad's buttons: {e.Message}");
+            if (notify)
+                DevicesChanged?.Invoke();
         }
+    }
+
+    void HandleKeymapReport(Connected device, KeypadButtons buttons, int keymap)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Buttons != buttons)
+                return;
+            device.Control?.KeymapChangedOnDevice(keymap - 1);
+            FollowDeviceKeymap(device.Key, keymap - 1);
+        }
+    }
+
+    void RetireStoppedButtons(Connected device, KeypadButtons buttons)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Buttons != buttons)
+                return;
+            device.Buttons = null;
+            // Do not allow a replacement until this listener's final callback has finished.
+            device.ButtonsStarting = true;
+            device.SetPhysicalHypershift(false);
+        }
+        // The callback was queued by the listener itself; joining it on this worker is safe.
+        buttons.Dispose();
+        bool notify = false;
+        lock (_gate)
+        {
+            device.ButtonsStarting = false;
+            if (_devices.TryGetValue(device.Port, out var current) && current == device)
+            {
+                device.ButtonsProblem = "The keypad button listener stopped. Reconnect the device to retry.";
+                notify = true;
+            }
+        }
+        if (notify)
+            DevicesChanged?.Invoke();
     }
 
     /// <summary>The window follows the thumbstick for the next 15 seconds (it asks again while the page is open). In
@@ -555,7 +809,7 @@ public sealed class DeviceManager : IDisposable
         {
             foreach (var device in _devices.Values)
             {
-                device.Session?.Dispose();
+                StopSession(device);
                 device.Control?.Dispose();
                 device.Buttons?.Dispose();
                 device.Monitor?.Dispose();

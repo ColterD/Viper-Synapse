@@ -6,6 +6,20 @@ namespace ViperSynapse.Service;
 
 static class Program
 {
+    internal static FileSystemWatcher WatchInputNodes(string path, FileSystemEventHandler changed)
+    {
+        var watcher = new FileSystemWatcher(path)
+        {
+            IncludeSubdirectories = false,
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.Attributes | NotifyFilters.Security,
+        };
+        watcher.Created += changed;
+        watcher.Deleted += changed;
+        watcher.Changed += changed;
+        watcher.EnableRaisingEvents = true;
+        return watcher;
+    }
+
     static async Task<int> Main(string[] args)
     {
         string root = args.Length >= 2 && args[0] == "--config" ? args[1] : SettingsStore.DefaultRoot();
@@ -54,7 +68,6 @@ static class Program
             Console.WriteLine($"{d.Name} ({d.ProductId}) {d.Firmware} {(d.Remapping ? "remapping" : "idle")} {d.Problem}");
 
         // Plugging and unplugging shows up as nodes coming and going in /dev/input.
-        using var watcher = new FileSystemWatcher("/dev/input") { IncludeSubdirectories = false, EnableRaisingEvents = true };
         var pending = 0;
         void Changed()
         {
@@ -63,8 +76,7 @@ static class Program
             // udev needs a moment to set the permissions on a new node.
             Task.Delay(500).ContinueWith(_ => { Volatile.Write(ref pending, 0); devices.Refresh(); }, TaskScheduler.Default);
         }
-        watcher.Created += (_, _) => Changed();
-        watcher.Deleted += (_, _) => Changed();
+        using var watcher = WatchInputNodes("/dev/input", (_, _) => Changed());
 
         try { await Task.Delay(Timeout.Infinite, stop.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) { }

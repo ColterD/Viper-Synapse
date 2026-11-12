@@ -13,7 +13,8 @@ public sealed record DeviceState(IReadOnlyList<ViperSynapse.Core.Lighting.DpiSta
 
 public sealed record DeviceInfo(
     string Key, string ProductId, string Name, string Type, string Port, bool Known, bool Verified,
-    string? Serial, string? Firmware, string? ControlNode, IReadOnlyList<string> InputNodes, bool Remapping, string? Problem);
+    string? Serial, string? Firmware, string? ControlNode, IReadOnlyList<string> InputNodes, bool Remapping, string? Problem,
+    IReadOnlyList<ushort>? InputControls = null, string? InputControlsStatus = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]

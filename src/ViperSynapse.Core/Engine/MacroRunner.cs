@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using ViperSynapse.Core.Bindings;
 
 namespace ViperSynapse.Core.Engine;
@@ -19,7 +20,10 @@ public sealed class MacroRunner(IInputSink sink, IEngineHost host, TimeProvider 
 
     async Task PlayAsync(IReadOnlyList<MacroStep> steps, CancellationToken cancel, int depth)
     {
+        var owner = (sink as SharedModifierSink)?.CreateOwner(collapseRepeatedDowns: true);
+        IInputSink output = owner ?? sink;
         var down = new HashSet<ushort>();
+        Exception? failure = null;
         // Open loops: where each starts and how many passes it has left.
         var loops = new Stack<(int Start, int Left)>();
         try
@@ -30,7 +34,7 @@ public sealed class MacroRunner(IInputSink sink, IEngineHost host, TimeProvider 
                 switch (steps[i])
                 {
                     case KeyStep key:
-                        Press(key, down);
+                        Press(key, down, output);
                         break;
                     case DelayStep delay when delay.Milliseconds > 0:
                         await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(delay.Milliseconds, MaxDelayMs)), time, cancel).ConfigureAwait(false);
@@ -44,13 +48,13 @@ public sealed class MacroRunner(IInputSink sink, IEngineHost host, TimeProvider 
                         break;
                     case ScrollStep scroll:
                         int clicks = Math.Clamp(scroll.Clicks, -MaxScrollClicks, MaxScrollClicks);
-                        sink.Relative(scroll.Horizontal ? RelativeAxes.HWheel : RelativeAxes.Wheel, clicks);
-                        sink.Relative(scroll.Horizontal ? RelativeAxes.HWheelHiRes : RelativeAxes.WheelHiRes, clicks * 120);
-                        sink.Sync();
+                        output.Relative(scroll.Horizontal ? RelativeAxes.HWheel : RelativeAxes.Wheel, clicks);
+                        output.Relative(scroll.Horizontal ? RelativeAxes.HWheelHiRes : RelativeAxes.WheelHiRes, clicks * 120);
+                        output.Sync();
                         break;
                     case TextStep text:
                         foreach (var key in TextTyper.Steps(text.Text))
-                            Press(key, down);
+                            Press(key, down, output);
                         break;
                     case RunStep run:
                         host.Launch(run.Command);
@@ -78,21 +82,35 @@ public sealed class MacroRunner(IInputSink sink, IEngineHost host, TimeProvider 
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
         }
+        catch (Exception error)
+        {
+            failure = error;
+        }
         finally
         {
             foreach (var code in down)
-                sink.Key(code, 0);
+            {
+                try { output.Key(code, 0); }
+                catch (Exception error) { failure ??= error; }
+            }
             if (down.Count > 0)
-                sink.Sync();
+            {
+                try { output.Sync(); }
+                catch (Exception error) { failure ??= error; }
+            }
+            try { owner?.Dispose(); }
+            catch (Exception error) { failure ??= error; }
         }
+        if (failure != null)
+            ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
-    void Press(KeyStep key, HashSet<ushort> down)
+    static void Press(KeyStep key, HashSet<ushort> down, IInputSink output)
     {
-        sink.Key(key.Code, key.Down ? 1 : 0);
-        sink.Sync();
+        output.Key(key.Code, key.Down ? 1 : 0);
         if (key.Down) down.Add(key.Code);
         else down.Remove(key.Code);
+        output.Sync();
     }
 
     /// <summary>Plays a macro the way its binding says, until it ends or <paramref name="cancel"/> fires.</summary>

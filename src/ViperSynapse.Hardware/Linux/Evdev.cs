@@ -61,7 +61,7 @@ public sealed class EvdevDevice : IDisposable
         {
             int errno = Marshal.GetLastPInvokeError();
             string message = $"{path}: {Libc.ErrorText(errno)}";
-            throw errno == 13 ? new UnauthorizedAccessException(message) : new IOException(message);
+            throw errno is 1 or 13 ? new UnauthorizedAccessException(message) : new IOException(message);
         }
         return new EvdevDevice(path, fd);
     }
@@ -81,17 +81,25 @@ public sealed class EvdevDevice : IDisposable
     }
 
     /// <summary>The codes this node can send for one event type (or the event types themselves, for type 0).</summary>
-    public unsafe IReadOnlyList<ushort> Capabilities(ushort type)
+    public unsafe IReadOnlyList<ushort> Capabilities(ushort type, bool throwOnError = false)
     {
         var bits = new byte[0x300 / 8 + 1];
         int n;
         fixed (byte* p = bits)
             n = Libc.Ioctl(_fd, Libc.IoR('E', 0x20u + type, (uint)bits.Length), p);
+        if (n < 0 && throwOnError)
+            throw CapabilityError(Path, Marshal.GetLastPInvokeError());
         var codes = new List<ushort>();
         for (int i = 0; i < Math.Max(n, 0) * 8; i++)
             if ((bits[i / 8] & (1 << (i % 8))) != 0)
                 codes.Add((ushort)i);
         return codes;
+    }
+
+    internal static Exception CapabilityError(string path, int errno)
+    {
+        string message = $"{path}: could not read input capabilities: {Libc.ErrorText(errno)}";
+        return errno is 1 or 13 ? new UnauthorizedAccessException(message) : new IOException(message);
     }
 
     /// <summary>Takes the device for ourselves: its events stop reaching the desktop until <see cref="Release"/>

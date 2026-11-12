@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Input;
 
@@ -11,23 +12,25 @@ namespace ViperSynapse.Core.Engine;
 /// </summary>
 public sealed class RemapEngine
 {
-    readonly IInputSink _sink;
+    readonly SharedModifierSink _sink;
     readonly IEngineHost _host;
     readonly TimeProvider _time;
     readonly MacroRunner _macros;
     readonly Dictionary<ushort, Binding> _held = [];
+    readonly Dictionary<ushort, SharedModifierSink.Owner> _owners = [];
     readonly Dictionary<ushort, CancellationTokenSource> _running = [];
     readonly Dictionary<Guid, CancellationTokenSource> _toggled = [];
+    readonly HashSet<Task> _backgroundTasks = [];
     // Where each sequence macro is up to, per key.
     readonly Dictionary<(ushort, Guid), int> _sequence = [];
     int _hypershiftHeld;
 
     public RemapEngine(IInputSink sink, IEngineHost host, TimeProvider? time = null)
     {
-        _sink = sink;
+        _sink = sink as SharedModifierSink ?? new SharedModifierSink(sink);
         _host = host;
         _time = time ?? TimeProvider.System;
-        _macros = new MacroRunner(sink, host, _time);
+        _macros = new MacroRunner(_sink, host, _time);
     }
 
     public Keymap Keymap { get; set; } = Keymap.Empty("Keymap 1");
@@ -45,6 +48,9 @@ public sealed class RemapEngine
 
     bool _hypershiftButton;
 
+    /// <summary>Current state of a device's separate firmware Hypershift button, if available.</summary>
+    public Func<bool>? PhysicalHypershiftHeld { get; set; }
+
     /// <summary>The keypad's own Hypershift button, reported by its firmware rather than as a key.</summary>
     public void HypershiftButton(bool held)
     {
@@ -54,7 +60,7 @@ public sealed class RemapEngine
         _hypershiftHeld = Math.Max(0, _hypershiftHeld + (held ? 1 : -1));
     }
 
-    public bool HypershiftActive => _hypershiftHeld > 0;
+    public bool HypershiftActive => _hypershiftHeld > 0 || PhysicalHypershiftHeld?.Invoke() == true;
 
     /// <summary>A key or button from the device: 1 down, 0 up, 2 auto-repeat.</summary>
     public void Key(ushort code, int value)
@@ -77,13 +83,36 @@ public sealed class RemapEngine
             var binding = _host.Shortcuts.Completed(code, _held.ContainsKey)?.Binding ?? Keymap.Resolve(code, HypershiftActive);
             if (binding is DefaultBinding && SourceKeys.IsStick(code))
                 binding = Defaults?.Invoke(code) ?? new DisableBinding();
+            var owner = _sink.CreateOwner();
             _held[code] = binding;
-            Press(code, binding);
+            _owners[code] = owner;
+            try { Press(code, binding, owner); }
+            catch (Exception error)
+            {
+                _held.Remove(code);
+                _owners.Remove(code);
+                DisposeAfterFailure(owner, error);
+                throw;
+            }
         }
         else if (_held.Remove(code, out var binding))
         {
-            Release(code, binding);
+            var owner = _owners[code];
+            _owners.Remove(code);
+            try { Release(code, binding, owner); }
+            catch (Exception error)
+            {
+                DisposeAfterFailure(owner, error);
+                throw;
+            }
+            owner.Dispose();
         }
+    }
+
+    static void DisposeAfterFailure(SharedModifierSink.Owner owner, Exception failure)
+    {
+        try { owner.Dispose(); }
+        catch (Exception cleanup) { failure.Data["ViperSynapse.CleanupFailure"] = cleanup; }
     }
 
     /// <summary>Wheel movement: each direction is a control of its own and can be rebound.</summary>
@@ -105,8 +134,18 @@ public sealed class RemapEngine
             return;
         for (int i = 0; i < Math.Abs(value); i++)
         {
-            Press(source, binding);
-            Release(source, binding);
+            var owner = _sink.CreateOwner();
+            try
+            {
+                Press(source, binding, owner);
+                Release(source, binding, owner);
+            }
+            catch (Exception error)
+            {
+                DisposeAfterFailure(owner, error);
+                throw;
+            }
+            owner.Dispose();
         }
     }
 
@@ -119,9 +158,17 @@ public sealed class RemapEngine
     /// unplugged, the profile changed or the engine is shutting down.</summary>
     public void Reset()
     {
+        Exception? failure = null;
         foreach (var (code, binding) in _held.ToList())
-            Release(code, binding);
+        {
+            var owner = _owners[code];
+            try { Release(code, binding, owner); }
+            catch (Exception error) { failure ??= error; }
+            try { owner.Dispose(); }
+            catch (Exception error) { failure ??= error; }
+        }
         _held.Clear();
+        _owners.Clear();
         lock (_running)
         {
             foreach (var cts in _running.Values.Concat(_toggled.Values))
@@ -131,6 +178,27 @@ public sealed class RemapEngine
         _toggled.Clear();
         _hypershiftHeld = 0;
         _hypershiftButton = false;
+        // Retry releases already queued by previous resets. Background actions can still be finishing,
+        // so callers must confirm their completion separately before declaring output recovery.
+        if (failure == null)
+        {
+            try { _sink.RetryPending(); }
+            catch (Exception error) { failure = error; }
+        }
+        if (failure != null)
+            ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    /// <summary>Confirms that this engine's background cleanup has finished and retries queued output.</summary>
+    public bool TryConfirmOutputRecovery()
+    {
+        // Call under the same serialization as Key and Reset, so no new engine work can start between
+        // the snapshot and the retry. Never wait here: cleanup can depend on code outside the engine.
+        lock (_running)
+            if (_backgroundTasks.Any(task => !task.IsCompleted))
+                return false;
+        _sink.RetryPending();
+        return true;
     }
 
     /// <summary>Stops every running and toggled macro (any-key interruption). Held turbo keys keep going.</summary>
@@ -150,30 +218,30 @@ public sealed class RemapEngine
         }
     }
 
-    void Press(ushort code, Binding binding)
+    void Press(ushort code, Binding binding, IInputSink output)
     {
         switch (binding)
         {
             case DefaultBinding:
-                Emit(code, 1);
+                Emit(output, code, 1);
                 break;
             case KeyboardBinding k when k.Turbo:
-                StartTurbo(code, k.TurboRate, () => Tap(k));
+                StartTurbo(code, k.TurboRate, owner => Tap(k, owner));
                 break;
             case KeyboardBinding k:
                 foreach (var m in ModifierCodes(k.Modifiers))
-                    _sink.Key(m, 1);
-                Emit(k.Key, 1);
+                    output.Key(m, 1);
+                Emit(output, k.Key, 1);
                 break;
             case MouseBinding m when m.Turbo || IsWheel(m.Function):
-                if (m.Turbo) StartTurbo(code, m.TurboRate, () => Click(m.Function));
-                else Click(m.Function);
+                if (m.Turbo) StartTurbo(code, m.TurboRate, owner => Click(m.Function, owner));
+                else Click(m.Function, output);
                 break;
             case MouseBinding { Function: MouseFunction.DoubleClick }:
-                Click(MouseFunction.DoubleClick);
+                Click(MouseFunction.DoubleClick, output);
                 break;
             case MouseBinding m:
-                Emit(ButtonOf(m.Function), 1);
+                Emit(output, ButtonOf(m.Function), 1);
                 break;
             case MacroBinding macro:
                 StartMacro(code, macro);
@@ -199,25 +267,25 @@ public sealed class RemapEngine
         }
     }
 
-    void Release(ushort code, Binding binding)
+    void Release(ushort code, Binding binding, IInputSink output)
     {
         switch (binding)
         {
             case DefaultBinding:
-                Emit(code, 0);
+                Emit(output, code, 0);
                 break;
             case KeyboardBinding { Turbo: true } or MouseBinding { Turbo: true }:
                 Stop(code);
                 break;
             case KeyboardBinding k:
-                Emit(k.Key, 0);
+                Emit(output, k.Key, 0);
                 foreach (var m in ModifierCodes(k.Modifiers).Reverse())
-                    _sink.Key(m, 0);
+                    output.Key(m, 0);
                 if (k.Modifiers != Modifiers.None)
                     _sink.Sync();
                 break;
             case MouseBinding m when !IsWheel(m.Function) && m.Function != MouseFunction.DoubleClick:
-                Emit(ButtonOf(m.Function), 0);
+                Emit(output, ButtonOf(m.Function), 0);
                 break;
             case MacroBinding { Playback: MacroPlayback.WhileHeld }:
                 Stop(code);
@@ -267,17 +335,27 @@ public sealed class RemapEngine
         Run(code, ct => _macros.PlayAsync(macro, binding.Playback, binding.Times, ct));
     }
 
-    void StartTurbo(ushort code, int rate, Action tap)
+    void StartTurbo(ushort code, int rate, Action<IInputSink> tap)
     {
         var period = TimeSpan.FromSeconds(1.0 / Math.Clamp(rate, 1, 100));
         Run(code, async ct =>
         {
-            while (!ct.IsCancellationRequested)
+            var owner = _sink.CreateOwner();
+            try
             {
-                tap();
-                try { await Task.Delay(period, _time, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return; }
+                while (!ct.IsCancellationRequested)
+                {
+                    tap(owner);
+                    try { await Task.Delay(period, _time, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
             }
+            catch (Exception error)
+            {
+                DisposeAfterFailure(owner, error);
+                throw;
+            }
+            owner.Dispose();
         });
     }
 
@@ -308,20 +386,31 @@ public sealed class RemapEngine
         cts?.Cancel();
     }
 
-    void Launch(Task task) => task.ContinueWith(t => _host.Report(t.Exception!.GetBaseException()), TaskContinuationOptions.OnlyOnFaulted);
-
-    void Tap(KeyboardBinding k)
+    void Launch(Task task)
     {
-        foreach (var m in ModifierCodes(k.Modifiers))
-            _sink.Key(m, 1);
-        Emit(k.Key, 1);
-        Emit(k.Key, 0);
-        foreach (var m in ModifierCodes(k.Modifiers).Reverse())
-            _sink.Key(m, 0);
-        _sink.Sync();
+        lock (_running)
+            _backgroundTasks.Add(task);
+        _ = task.ContinueWith(t =>
+        {
+            lock (_running)
+                _backgroundTasks.Remove(t);
+            if (t.IsFaulted)
+                _host.Report(t.Exception!.GetBaseException());
+        });
     }
 
-    void Click(MouseFunction function)
+    void Tap(KeyboardBinding k, IInputSink output)
+    {
+        foreach (var m in ModifierCodes(k.Modifiers))
+            output.Key(m, 1);
+        Emit(output, k.Key, 1);
+        Emit(output, k.Key, 0);
+        foreach (var m in ModifierCodes(k.Modifiers).Reverse())
+            output.Key(m, 0);
+        output.Sync();
+    }
+
+    void Click(MouseFunction function, IInputSink output)
     {
         switch (function)
         {
@@ -330,11 +419,11 @@ public sealed class RemapEngine
             case MouseFunction.ScrollRight: Scroll(RelativeAxes.HWheel, 1); break;
             case MouseFunction.ScrollLeft: Scroll(RelativeAxes.HWheel, -1); break;
             case MouseFunction.DoubleClick:
-                for (int i = 0; i < 2; i++) { Emit(KeyCodes.BtnLeft, 1); Emit(KeyCodes.BtnLeft, 0); }
+                for (int i = 0; i < 2; i++) { Emit(output, KeyCodes.BtnLeft, 1); Emit(output, KeyCodes.BtnLeft, 0); }
                 break;
             default:
-                Emit(ButtonOf(function), 1);
-                Emit(ButtonOf(function), 0);
+                Emit(output, ButtonOf(function), 1);
+                Emit(output, ButtonOf(function), 0);
                 break;
         }
     }
@@ -350,6 +439,12 @@ public sealed class RemapEngine
     {
         _sink.Key(code, value);
         _sink.Sync();
+    }
+
+    static void Emit(IInputSink output, ushort code, int value)
+    {
+        output.Key(code, value);
+        output.Sync();
     }
 
     static bool IsWheel(MouseFunction f) => f is MouseFunction.ScrollUp or MouseFunction.ScrollDown or MouseFunction.ScrollLeft or MouseFunction.ScrollRight;

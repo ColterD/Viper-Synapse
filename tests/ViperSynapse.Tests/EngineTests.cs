@@ -44,6 +44,72 @@ public class EngineTests
         }
     }
 
+    sealed class FailOnShiftSink(Recorder rec) : IInputSink
+    {
+        public void Key(ushort code, int value)
+        {
+            if (code == KeyCodes.LeftShift && value == 1)
+                throw new InvalidOperationException("simulated output failure");
+            rec.Key(code, value);
+        }
+        public void Relative(ushort axis, int value) => rec.Relative(axis, value);
+        public void Sync() => rec.Sync();
+    }
+
+    sealed class FailPrimaryAndCleanupSink(Recorder rec) : IInputSink
+    {
+        public bool FailPress { get; set; }
+        public bool FailRelease { get; set; }
+        public void Key(ushort code, int value)
+        {
+            if (code == C && value == 1 && FailPress)
+                throw new IOException("primary press failure");
+            if (code == C && value == 0 && FailRelease)
+            {
+                FailRelease = false;
+                throw new IOException("primary release failure");
+            }
+            if (code == KeyCodes.LeftCtrl && value == 0)
+                throw new IOException("cleanup failure");
+            rec.Key(code, value);
+        }
+        public void Relative(ushort axis, int value) => rec.Relative(axis, value);
+        public void Sync() => rec.Sync();
+    }
+
+    sealed class FailReleaseSink(Recorder rec) : IInputSink
+    {
+        public bool Fail { get; set; }
+        public ushort FailCode { get; set; } = KeyCodes.LeftCtrl;
+        public void Key(ushort code, int value)
+        {
+            if (Fail && code == FailCode && value == 0)
+                throw new IOException("simulated modifier release failure");
+            rec.Key(code, value);
+        }
+        public void Relative(ushort axis, int value) => rec.Relative(axis, value);
+        public void Sync() => rec.Sync();
+    }
+
+    sealed class FailSyncSink(Recorder rec) : IInputSink
+    {
+        public bool Fail { get; set; }
+        public readonly List<string> Timeline = [];
+        public void Key(ushort code, int value)
+        {
+            Timeline.Add($"{KeyCodes.Name(code)}:{value}");
+            rec.Key(code, value);
+        }
+        public void Relative(ushort axis, int value) => rec.Relative(axis, value);
+        public void Sync()
+        {
+            if (Fail)
+                throw new IOException("simulated sync failure");
+            Timeline.Add("SYNC");
+            rec.Sync();
+        }
+    }
+
     /// <summary>A fake clock that counts the timers made on it, so a test can wait until a delay is pending
     /// before moving time: moving it earlier would be lost.</summary>
     sealed class CountingTime : FakeTimeProvider
@@ -91,6 +157,472 @@ public class EngineTests
         engine.Key(A, 2);
         engine.Key(A, 0);
         Assert.Equal(["KEY_LEFTCTRL:1", "KEY_LEFTSHIFT:1", "KEY_C:1", "KEY_C:0", "KEY_LEFTSHIFT:0", "KEY_LEFTCTRL:0"], rec.Events);
+    }
+
+    [Fact]
+    public void A_failed_press_preserves_its_error_when_cleanup_also_fails()
+    {
+        var rec = new Recorder();
+        var sink = new FailPrimaryAndCleanupSink(rec) { FailPress = true };
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        var error = Assert.Throws<IOException>(() => engine.Key(A, 1));
+        Assert.Equal("primary press failure", error.Message);
+        Assert.Equal("cleanup failure", Assert.IsType<IOException>(error.Data["ViperSynapse.CleanupFailure"]).Message);
+    }
+
+    [Fact]
+    public void A_failed_release_preserves_its_error_when_cleanup_also_fails()
+    {
+        var rec = new Recorder();
+        var sink = new FailPrimaryAndCleanupSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(A, 1);
+        sink.FailRelease = true;
+        var error = Assert.Throws<IOException>(() => engine.Key(A, 0));
+        Assert.Equal("primary release failure", error.Message);
+        Assert.Equal("cleanup failure", Assert.IsType<IOException>(error.Data["ViperSynapse.CleanupFailure"]).Message);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_shared_modifier_stays_down_until_the_last_binding_releases_it(bool releaseSecondFirst)
+    {
+        var keymap = Keymap.Empty("k")
+            .With(A, new KeyboardBinding(C, Modifiers.Ctrl))
+            .With(B, new KeyboardBinding(Tab, Modifiers.Ctrl));
+        var (engine, rec, _) = Make(keymap);
+
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        engine.Key(releaseSecondFirst ? B : A, 0);
+
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(releaseSecondFirst ? A : B, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void A_modifier_used_as_both_key_and_chord_modifier_is_released()
+    {
+        var (engine, rec, _) = Make(Keymap.Empty("k").With(A, new KeyboardBinding(KeyCodes.LeftCtrl, Modifiers.Ctrl)));
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void A_passed_through_modifier_stays_down_after_a_chord_releases_it()
+    {
+        var (engine, rec, _) = Make(Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)));
+        engine.Key(KeyCodes.LeftCtrl, 1);
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(KeyCodes.LeftCtrl, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void Reset_releases_a_shared_modifier_only_once()
+    {
+        var keymap = Keymap.Empty("k")
+            .With(A, new KeyboardBinding(C, Modifiers.Ctrl))
+            .With(B, new KeyboardBinding(Tab, Modifiers.Ctrl | Modifiers.Shift));
+        var (engine, rec, _) = Make(keymap);
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        engine.Reset();
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+        Assert.Equal(1, rec.Count("KEY_LEFTSHIFT:0"));
+    }
+
+    [Fact]
+    public void A_new_chord_reasserts_a_modifier_after_a_macro_uses_it()
+    {
+        var macro = Macro.Create("ctrl", [new KeyStep(KeyCodes.LeftCtrl, true), new KeyStep(KeyCodes.LeftCtrl, false), new KeyStep(1, true), new KeyStep(1, false)]);
+        var keymap = Keymap.Empty("k")
+            .With(A, new KeyboardBinding(C, Modifiers.Ctrl))
+            .With(B, new MacroBinding(macro.Id))
+            .With(Tab, new KeyboardBinding(Caps, Modifiers.Ctrl));
+        var (engine, rec, _) = Make(keymap);
+        rec.Macros[macro.Id] = macro;
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        rec.WaitFor(() => rec.Count("KEY_ESC:0") == 1);
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(Tab, 1);
+        Assert.Equal(3, rec.Count("KEY_LEFTCTRL:1"));
+        engine.Reset();
+    }
+
+    [Fact]
+    public void A_macro_cannot_release_a_modifier_held_by_another_binding()
+    {
+        var macro = Macro.Create("tap ctrl", [new KeyStep(KeyCodes.LeftCtrl, true), new KeyStep(KeyCodes.LeftCtrl, false), new KeyStep(Tab, true), new KeyStep(Tab, false)]);
+        var keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)).With(B, new MacroBinding(macro.Id));
+        var (engine, rec, _) = Make(keymap);
+        rec.Macros[macro.Id] = macro;
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        rec.WaitFor(() => rec.Count("KEY_TAB:0") == 1);
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(A, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void A_turbo_chord_cannot_release_a_modifier_held_by_another_binding()
+    {
+        var keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl))
+            .With(B, new KeyboardBinding(Tab, Modifiers.Ctrl, Turbo: true));
+        var (engine, rec, _) = Make(keymap);
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        rec.WaitFor(() => rec.Count("KEY_TAB:0") == 1);
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(B, 0);
+        engine.Key(A, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void Devices_sharing_an_output_keep_each_others_modifiers_held()
+    {
+        var rec = new Recorder();
+        var output = new SharedModifierSink(rec);
+        var first = new RemapEngine(output, rec) { Keymap = Keymap.Empty("first").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        var second = new RemapEngine(output, rec) { Keymap = Keymap.Empty("second").With(B, new KeyboardBinding(Tab, Modifiers.Ctrl)) };
+        first.Key(A, 1);
+        second.Key(B, 1);
+        first.Reset();
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        second.Key(B, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void A_failed_overlapping_press_does_not_release_another_devices_key()
+    {
+        var rec = new Recorder();
+        var sink = new FailSyncSink(rec);
+        var output = new SharedModifierSink(sink);
+        var first = new RemapEngine(output, rec);
+        var second = new RemapEngine(output, rec);
+        first.Key(B, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => second.Key(B, 1));
+        sink.Fail = false;
+        rec.Clear();
+        first.Key(B, 2);
+        Assert.DoesNotContain("KEY_B:0", rec.Events);
+        first.Key(B, 0);
+        Assert.Equal(["KEY_B:2", "KEY_B:0"], rec.Events);
+    }
+
+    [Fact]
+    public void Two_devices_sharing_a_key_release_it_only_after_both_let_go()
+    {
+        var rec = new Recorder();
+        var output = new SharedModifierSink(rec);
+        var first = new RemapEngine(output, rec);
+        var second = new RemapEngine(output, rec);
+        first.Key(B, 1);
+        second.Key(B, 1);
+        first.Key(B, 0);
+        Assert.DoesNotContain("KEY_B:0", rec.Events);
+        second.Key(B, 0);
+        Assert.Equal(1, rec.Count("KEY_B:0"));
+    }
+
+    [Fact]
+    public void A_macro_cannot_release_a_key_held_by_another_device()
+    {
+        var rec = new Recorder();
+        var output = new SharedModifierSink(rec);
+        var macro = Macro.Create("overlap", [new KeyStep(B, false), new KeyStep(B, true), new KeyStep(B, false),
+            new KeyStep(Tab, true), new KeyStep(Tab, false)]);
+        rec.Macros[macro.Id] = macro;
+        var first = new RemapEngine(output, rec);
+        var second = new RemapEngine(output, rec) { Keymap = Keymap.Empty("second").With(A, new MacroBinding(macro.Id)) };
+        first.Key(B, 1);
+        second.Key(A, 1);
+        rec.WaitFor(() => rec.Count("KEY_TAB:0") == 1);
+        Assert.DoesNotContain("KEY_B:0", rec.Events);
+        first.Key(B, 0);
+        Assert.Equal(1, rec.Count("KEY_B:0"));
+    }
+
+    [Fact]
+    public void Repeated_passed_through_modifiers_do_not_add_extra_holds()
+    {
+        var (engine, rec, _) = Make(Keymap.Empty("k"));
+        engine.Key(KeyCodes.LeftCtrl, 1);
+        engine.Key(KeyCodes.LeftCtrl, 1);
+        engine.Key(KeyCodes.LeftCtrl, 2);
+        engine.Key(KeyCodes.LeftCtrl, 0);
+        engine.Key(KeyCodes.LeftCtrl, 0);
+        Assert.Equal(["KEY_LEFTCTRL:1", "KEY_LEFTCTRL:2", "KEY_LEFTCTRL:0"], rec.Events);
+    }
+
+    [Fact]
+    public void A_cancelled_macro_releases_only_its_own_modifier()
+    {
+        var macro = Macro.Create("hold", [new KeyStep(KeyCodes.LeftCtrl, true), new KeyStep(Tab, true), new DelayStep(10000)]);
+        var keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl))
+            .With(B, new MacroBinding(macro.Id, MacroPlayback.WhileHeld));
+        var (engine, rec, _) = Make(keymap);
+        rec.Macros[macro.Id] = macro;
+        engine.Key(B, 1);
+        rec.WaitFor(() => rec.Count("KEY_TAB:1") == 1);
+        engine.Key(A, 1);
+        engine.Key(B, 0);
+        rec.WaitFor(() => rec.Count("KEY_TAB:0") == 1);
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(A, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void Unbalanced_macro_modifier_events_do_not_steal_another_hold()
+    {
+        var macro = Macro.Create("bad ctrl", [new KeyStep(KeyCodes.LeftCtrl, false), new KeyStep(KeyCodes.LeftCtrl, true),
+            new KeyStep(KeyCodes.LeftCtrl, true), new KeyStep(KeyCodes.LeftCtrl, false), new KeyStep(KeyCodes.LeftCtrl, false),
+            new KeyStep(Tab, true), new KeyStep(Tab, false)]);
+        var keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)).With(B, new MacroBinding(macro.Id));
+        var (engine, rec, _) = Make(keymap);
+        rec.Macros[macro.Id] = macro;
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        rec.WaitFor(() => rec.Count("KEY_TAB:0") == 1);
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        engine.Key(A, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void A_nested_macro_cannot_release_its_callers_modifier()
+    {
+        var inner = Macro.Create("inner", [new KeyStep(KeyCodes.LeftCtrl, true), new KeyStep(KeyCodes.LeftCtrl, false)]);
+        var outer = Macro.Create("outer", [new KeyStep(KeyCodes.LeftCtrl, true), new MacroCallStep(inner.Id),
+            new KeyStep(Tab, true), new KeyStep(Tab, false), new KeyStep(KeyCodes.LeftCtrl, false)]);
+        var (engine, rec, _) = Make(Keymap.Empty("k").With(A, new MacroBinding(outer.Id)));
+        rec.Macros[inner.Id] = inner;
+        rec.Macros[outer.Id] = outer;
+        engine.Key(A, 1);
+        rec.WaitFor(() => rec.Count("KEY_LEFTCTRL:0") == 1);
+        var events = rec.Events;
+        Assert.True(Array.IndexOf(events, "KEY_LEFTCTRL:0") > Array.IndexOf(events, "KEY_TAB:0"));
+    }
+
+    [Fact]
+    public void A_failed_chord_press_releases_modifiers_already_acquired()
+    {
+        var rec = new Recorder();
+        var engine = new RemapEngine(new FailOnShiftSink(rec), rec)
+        {
+            Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl | Modifiers.Shift)),
+        };
+        Assert.Throws<InvalidOperationException>(() => engine.Key(A, 1));
+        Assert.Equal(["KEY_LEFTCTRL:1", "KEY_LEFTCTRL:0"], rec.Events);
+        engine.Reset();
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void Failed_modifier_release_does_not_leak_ownership_after_output_recovers()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(A, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Key(A, 0));
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        Assert.Equal(["KEY_LEFTCTRL:0", "KEY_LEFTCTRL:1", "KEY_C:1", "KEY_C:0", "KEY_LEFTCTRL:0"], rec.Events);
+    }
+
+    [Fact]
+    public void Failed_modifier_release_is_retried_before_a_later_unmodified_key()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(A, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Key(A, 0));
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(B, 1);
+        Assert.Equal(["KEY_LEFTCTRL:0", "KEY_B:1"], rec.Events);
+        engine.Key(B, 0);
+    }
+
+    [Fact]
+    public void Pending_modifier_release_blocks_later_input_until_it_succeeds()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(A, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Key(A, 0));
+        Assert.Throws<IOException>(() => engine.Key(B, 1));
+        Assert.DoesNotContain("KEY_B:1", rec.Events);
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(B, 1);
+        Assert.Equal(["KEY_LEFTCTRL:0", "KEY_B:1"], rec.Events);
+        engine.Key(B, 0);
+    }
+
+    [Fact]
+    public void A_key_released_while_another_release_is_pending_is_not_lost()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(B, 1);
+        engine.Key(A, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Key(A, 0));
+        Assert.Throws<IOException>(() => engine.Key(B, 0));
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(Tab, 1);
+        Assert.Equal(["KEY_LEFTCTRL:0", "KEY_B:0", "KEY_TAB:1"], rec.Events);
+        engine.Key(Tab, 0);
+    }
+
+    [Fact]
+    public async Task A_cancelled_macro_queues_every_held_key_when_output_is_blocked()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec);
+        var shared = new SharedModifierSink(sink);
+        var runner = new MacroRunner(shared, rec, new CountingTime());
+        using var cancel = new CancellationTokenSource();
+        var play = runner.PlayAsync([new KeyStep(B, true), new KeyStep(C, true), new DelayStep(10000)], cancel.Token);
+        rec.WaitFor(() => rec.Count("KEY_C:1") == 1);
+        using var other = shared.CreateOwner();
+        other.Key(KeyCodes.LeftCtrl, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => other.Key(KeyCodes.LeftCtrl, 0));
+        Assert.Throws<IOException>(() => other.Dispose());
+        cancel.Cancel();
+        await Assert.ThrowsAsync<IOException>(() => play);
+        sink.Fail = false;
+        rec.Clear();
+        using var next = shared.CreateOwner();
+        next.Key(Tab, 1);
+        var events = rec.Events;
+        Assert.Equal("KEY_LEFTCTRL:0", events[0]);
+        Assert.Contains("KEY_B:0", events);
+        Assert.Contains("KEY_C:0", events);
+        Assert.True(Array.IndexOf(events, "KEY_B:0") < Array.IndexOf(events, "KEY_TAB:1"));
+        Assert.True(Array.IndexOf(events, "KEY_C:0") < Array.IndexOf(events, "KEY_TAB:1"));
+    }
+
+    [Fact]
+    public void A_failed_press_sync_releases_the_written_key_before_later_input()
+    {
+        var rec = new Recorder();
+        var sink = new FailSyncSink(rec) { Fail = true };
+        var engine = new RemapEngine(sink, rec);
+        Assert.Throws<IOException>(() => engine.Key(B, 1));
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(C, 1);
+        Assert.Equal(["KEY_B:0", "KEY_C:1"], rec.Events);
+        engine.Key(C, 0);
+    }
+
+    [Fact]
+    public async Task A_failed_macro_press_sync_releases_the_written_key_before_later_input()
+    {
+        var rec = new Recorder();
+        var sink = new FailSyncSink(rec) { Fail = true };
+        var shared = new SharedModifierSink(sink);
+        var runner = new MacroRunner(shared, rec, new CountingTime());
+        await Assert.ThrowsAsync<IOException>(() => runner.PlayAsync([new KeyStep(B, true)], CancellationToken.None));
+        sink.Fail = false;
+        rec.Clear();
+        using var next = shared.CreateOwner();
+        next.Key(C, 1);
+        Assert.Equal(["KEY_B:0", "KEY_C:1"], rec.Events);
+    }
+
+    [Fact]
+    public void Failed_sync_does_not_leak_ownership_after_output_recovers()
+    {
+        var rec = new Recorder();
+        var sink = new FailSyncSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(A, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Key(A, 0));
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        Assert.Equal(["KEY_LEFTCTRL:0", "KEY_LEFTCTRL:1", "KEY_C:1", "KEY_C:0", "KEY_LEFTCTRL:0"], rec.Events);
+    }
+
+    [Fact]
+    public void Failed_sync_is_retried_before_a_later_input_event()
+    {
+        var rec = new Recorder();
+        var sink = new FailSyncSink(rec);
+        var engine = new RemapEngine(sink, rec) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl)) };
+        engine.Key(A, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Key(A, 0));
+        sink.Fail = false;
+        sink.Timeline.Clear();
+        engine.Key(B, 1);
+        Assert.Equal(["SYNC", "KEY_LEFTCTRL:0", "SYNC", "KEY_B:1", "SYNC"], sink.Timeline);
+        engine.Key(B, 0);
+    }
+
+    [Fact]
+    public void Failed_cleanup_does_not_release_or_leak_another_devices_modifier()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec) { FailCode = KeyCodes.LeftShift };
+        var shared = new SharedModifierSink(sink);
+        var first = new RemapEngine(shared, rec) { Keymap = Keymap.Empty("first").With(A, new KeyboardBinding(C, Modifiers.Ctrl | Modifiers.Shift)) };
+        var second = new RemapEngine(shared, rec) { Keymap = Keymap.Empty("second").With(B, new KeyboardBinding(Tab, Modifiers.Ctrl)) };
+        first.Key(A, 1);
+        second.Key(B, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => first.Key(A, 0));
+        Assert.DoesNotContain("KEY_LEFTCTRL:0", rec.Events);
+        sink.Fail = false;
+        second.Key(B, 0);
+        Assert.Equal(1, rec.Count("KEY_LEFTCTRL:0"));
+    }
+
+    [Fact]
+    public void Reset_queues_other_releases_when_one_release_fails()
+    {
+        var rec = new Recorder();
+        var sink = new FailReleaseSink(rec);
+        var keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C, Modifiers.Ctrl))
+            .With(B, new KeyboardBinding(Tab, Modifiers.Shift));
+        var engine = new RemapEngine(sink, rec) { Keymap = keymap };
+        engine.Key(A, 1);
+        engine.Key(B, 1);
+        sink.Fail = true;
+        Assert.Throws<IOException>(() => engine.Reset());
+        Assert.DoesNotContain("KEY_LEFTSHIFT:0", rec.Events);
+        sink.Fail = false;
+        rec.Clear();
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        Assert.Equal(["KEY_LEFTCTRL:0", "KEY_TAB:0", "KEY_LEFTSHIFT:0", "KEY_LEFTCTRL:1", "KEY_C:1", "KEY_C:0", "KEY_LEFTCTRL:0"], rec.Events);
     }
 
     [Fact]
