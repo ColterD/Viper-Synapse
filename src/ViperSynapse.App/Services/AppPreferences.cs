@@ -76,6 +76,7 @@ public static class Autostart
         return self;
     }
 
+    /// <summary>Creates or removes the desktop autostart entry.</summary>
     /// <param name="enabled">Whether to start at sign-in.</param>
     /// <param name="minimized">Start in the tray (Synapse's "Minimize to system tray on startup") or open the window.</param>
     public static Task SetAsync(bool enabled, bool minimized = true) => Task.Run(() =>

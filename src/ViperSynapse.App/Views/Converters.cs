@@ -63,9 +63,9 @@ public static class PhysicalKeys
     {
         string name = key switch
         {
-            >= PhysicalKey.A and <= PhysicalKey.Z => "KEY_" + key.ToString(),
+            >= PhysicalKey.A and <= PhysicalKey.Z => $"KEY_{key}",
             >= PhysicalKey.Digit0 and <= PhysicalKey.Digit9 => "KEY_" + key.ToString()[5..],
-            >= PhysicalKey.F1 and <= PhysicalKey.F24 => "KEY_" + key.ToString(),
+            >= PhysicalKey.F1 and <= PhysicalKey.F24 => $"KEY_{key}",
             >= PhysicalKey.NumPad0 and <= PhysicalKey.NumPad9 => "KEY_KP" + key.ToString()[6..],
             PhysicalKey.Escape => "KEY_ESC",
             PhysicalKey.Backquote => "KEY_GRAVE",
