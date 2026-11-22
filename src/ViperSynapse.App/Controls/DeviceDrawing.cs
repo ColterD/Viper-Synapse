@@ -204,9 +204,16 @@ public sealed class DeviceDrawing : Control
         At("Scroll Click", new Rect(66, 40, 18, 34), true);
         var side = device.Rows.Where(r => r.Key.Group == "side").ToList();
         for (int i = 0; i < side.Count; i++)
-            _keys.Add(new KeyShape(side[i], new Rect(200 + i % 3 * 44, 40 + i / 3 * 44, 38, 38), 0, false));
+        {
+            int gridColumn = i % 3;
+            int gridRow = i / 3;
+            _keys.Add(new KeyShape(side[i], new Rect(200 + gridColumn * 44, 40 + gridRow * 44, 38, 38), 0, false));
+        }
         if (side.Count > 0)
-            _body.Add((new RectangleGeometry(new Rect(188, 28, 3 * 44 + 10, (side.Count + 2) / 3 * 44 + 10), 14, 14), BodyFill, BodyPen));
+        {
+            int gridRowCount = (side.Count + 2) / 3;
+            _body.Add((new RectangleGeometry(new Rect(188, 28, 3 * 44 + 10, gridRowCount * 44 + 10), 14, 14), BodyFill, BodyPen));
+        }
     }
 
     /// <summary>Where each button sits on the top-down mouse of <see cref="LayoutMouseCallouts"/>, by its catalogue label.</summary>
@@ -279,7 +286,9 @@ public sealed class DeviceDrawing : Control
         int i = 0;
         foreach (var row in device.Rows)
         {
-            _keys.Add(new KeyShape(row, new Rect(i % 8 * 56, i / 8 * 56, 50, 50), 0, false));
+            int gridColumn = i % 8;
+            int gridRow = i / 8;
+            _keys.Add(new KeyShape(row, new Rect(gridColumn * 56, gridRow * 56, 50, 50), 0, false));
             i++;
         }
     }

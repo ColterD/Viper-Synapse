@@ -55,9 +55,14 @@ public static class EffectSupport
 
     /// <summary>A rows x columns grid, row by row.</summary>
     public static IReadOnlyList<LedPoint> Grid(int rows, int columns) =>
-        Enumerable.Range(0, rows * columns).Select(i => new LedPoint(
-            columns == 1 ? 0.5 : (double)(i % columns) / (columns - 1),
-            rows == 1 ? 0.5 : (double)(i / columns) / (rows - 1))).ToList();
+        Enumerable.Range(0, rows * columns).Select(i =>
+        {
+            int gridColumn = i % columns;
+            int gridRow = i / columns;
+            return new LedPoint(
+                columns == 1 ? 0.5 : (double)gridColumn / (columns - 1),
+                rows == 1 ? 0.5 : (double)gridRow / (rows - 1));
+        }).ToList();
 }
 
 /// <summary>
