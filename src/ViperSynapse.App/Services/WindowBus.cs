@@ -30,40 +30,53 @@ public sealed class WindowBus : IPathMethodHandler, IDisposable
     {
         if (DBusAddress.Session is not { } address)
             return true;
-        var connection = new DBusConnection(address);
         try
         {
-            await connection.ConnectAsync().ConfigureAwait(false);
-            connection.AddMethodHandler(this);
-            if (await connection.TryRequestNameAsync(Name, RequestNameOptions.None).ConfigureAwait(false))
+            DBusConnection? connection = new(address);
+            try
             {
-                _connection = connection;
-                return true;
+                await connection.ConnectAsync().ConfigureAwait(false);
+                connection.AddMethodHandler(this);
+                if (await connection.TryRequestNameAsync(Name, RequestNameOptions.None).ConfigureAwait(false))
+                {
+                    _connection = connection;
+                    connection = null;
+                    return true;
+                }
+                string running = await connection.CallMethodAsync(Call(connection, "BuildId"),
+                    static (Message m, object? _) => m.GetBodyReader().ReadString(), null).ConfigureAwait(false);
+                if (running == BuildId)
+                {
+                    await connection.CallMethodAsync(Call(connection, "Show")).ConfigureAwait(false);
+                    return false;
+                }
+                await connection.CallMethodAsync(Call(connection, "Replace")).ConfigureAwait(false);
             }
-            string running = await connection.CallMethodAsync(Call(connection, "BuildId"),
-                static (Message m, object? _) => m.GetBodyReader().ReadString(), null).ConfigureAwait(false);
-            if (running == BuildId)
+            finally
             {
-                await connection.CallMethodAsync(Call(connection, "Show")).ConfigureAwait(false);
-                connection.Dispose();
-                return false;
+                connection?.Dispose();
             }
-            await connection.CallMethodAsync(Call(connection, "Replace")).ConfigureAwait(false);
-            connection.Dispose();
             // A connection asks for a name once; each try after the old copy lets go is a fresh one.
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
             while (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(200).ConfigureAwait(false);
-                var retry = new DBusConnection(address);
-                await retry.ConnectAsync().ConfigureAwait(false);
-                retry.AddMethodHandler(this);
-                if (await retry.TryRequestNameAsync(Name, RequestNameOptions.None).ConfigureAwait(false))
+                DBusConnection? retry = new(address);
+                try
                 {
-                    _connection = retry;
-                    return true;
+                    await retry.ConnectAsync().ConfigureAwait(false);
+                    retry.AddMethodHandler(this);
+                    if (await retry.TryRequestNameAsync(Name, RequestNameOptions.None).ConfigureAwait(false))
+                    {
+                        _connection = retry;
+                        retry = null;
+                        return true;
+                    }
                 }
-                retry.Dispose();
+                finally
+                {
+                    retry?.Dispose();
+                }
             }
             // The old copy did not let go; run anyway rather than leave the user with nothing.
             return true;
@@ -71,7 +84,6 @@ public sealed class WindowBus : IPathMethodHandler, IDisposable
         catch (Exception e) when (e is DBusConnectionException or DBusErrorReplyException or IOException)
         {
             // Without a bus there is no way to find the other copy; run anyway.
-            connection.Dispose();
             return true;
         }
     }
