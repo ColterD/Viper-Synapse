@@ -66,9 +66,9 @@ public class KeypadButtonsDeadlockTests
     [InlineData(false)]
     public void Physical_hypershift_state_survives_the_gap_between_sessions(bool stillHeld)
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-keypad-gap-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-keypad-gap-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string nodePath = Path.Combine(root, "hidraw-test");
+        string nodePath = Path.Join(root, "hidraw-test");
         int writer = CreateListeningNode(nodePath);
         try
         {
@@ -111,9 +111,9 @@ public class KeypadButtonsDeadlockTests
     [Fact]
     public void Physical_and_keyboard_hypershift_sources_are_additive()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-keypad-additive-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-keypad-additive-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string nodePath = Path.Combine(root, "hidraw-test");
+        string nodePath = Path.Join(root, "hidraw-test");
         int writer = CreateListeningNode(nodePath);
         try
         {
@@ -149,9 +149,9 @@ public class KeypadButtonsDeadlockTests
     [Fact]
     public void Hypershift_report_does_not_wait_for_manager_lock_while_listener_is_stopping()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-keypad-lock-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-keypad-lock-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string nodePath = Path.Combine(root, "hidraw-test");
+        string nodePath = Path.Join(root, "hidraw-test");
         int writer = CreateListeningNode(nodePath);
         try
         {

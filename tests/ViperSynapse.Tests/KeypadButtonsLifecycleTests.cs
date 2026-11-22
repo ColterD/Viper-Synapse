@@ -21,7 +21,7 @@ public class KeypadButtonsLifecycleTests
     [Fact]
     public void Immediate_eof_notifies_the_registered_stopped_callback()
     {
-        string path = Path.Combine(Path.GetTempPath(), "viper-keypad-stop-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Join(Path.GetTempPath(), "viper-keypad-stop-" + Guid.NewGuid().ToString("N"));
         File.WriteAllBytes(path, []);
         using var stopped = new ManualResetEventSlim();
         KeypadButtons? buttons = null;
@@ -46,9 +46,9 @@ public class KeypadButtonsLifecycleTests
     [Fact]
     public void Intentional_dispose_does_not_report_an_unexpected_stop()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "viper-keypad-stop-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Join(Path.GetTempPath(), "viper-keypad-stop-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, "input");
+        string path = Path.Join(directory, "input");
         Assert.Equal(0, mkfifo(path, 0x180));
         int writer = open(path, 2 | 0x800);
         Assert.True(writer >= 0);
@@ -76,7 +76,7 @@ public class KeypadButtonsLifecycleTests
     [Fact]
     public void Listener_exit_notification_is_registered_before_an_immediate_eof()
     {
-        string path = Path.Combine(Path.GetTempPath(), "viper-keypad-eof-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Join(Path.GetTempPath(), "viper-keypad-eof-" + Guid.NewGuid().ToString("N"));
         File.WriteAllBytes(path, []);
         using var released = new ManualResetEventSlim();
         KeypadButtons? buttons = null;
@@ -103,9 +103,9 @@ public class KeypadButtonsLifecycleTests
     [InlineData(false)]
     public void Listener_registers_callbacks_before_reading_queued_first_report(bool hypershift)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "viper-keypad-start-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Join(Path.GetTempPath(), "viper-keypad-start-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, "input");
+        string path = Path.Join(directory, "input");
         Assert.Equal(0, mkfifo(path, 0x180));
         int writer = open(path, 2 | 0x800);
         Assert.True(writer >= 0);
@@ -135,9 +135,9 @@ public class KeypadButtonsLifecycleTests
     [Fact]
     public void Listener_clears_held_hypershift_when_the_input_node_disappears()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "viper-keypad-exit-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Join(Path.GetTempPath(), "viper-keypad-exit-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, "input");
+        string path = Path.Join(directory, "input");
         Assert.Equal(0, mkfifo(path, 0x180)); // 0600
         // Keep the write end open while Start opens the FIFO read end.
         int writer = open(path, 2 | 0x800); // O_RDWR | O_NONBLOCK

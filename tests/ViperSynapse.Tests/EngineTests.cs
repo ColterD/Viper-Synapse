@@ -906,6 +906,43 @@ public class MacroFeatureTests
     }
 
     [Fact]
+    public void MacroDuration_Fixed_delay_multiplication_does_not_overflow_int()
+    {
+        var macro = Macro.Create("fixed overflow", [new LoopStartStep(2), new DelayStep(1_500_000_000), new LoopEndStep()]);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(3_000_000_000L), macro.Duration);
+    }
+
+    [Fact]
+    public void MacroDuration_Random_delay_endpoints_do_not_overflow_int_before_averaging()
+    {
+        var macro = Macro.Create("random overflow", [new RandomDelayStep(2_000_000_000, 2_100_000_000)]);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(2_050_000_000L), macro.Duration);
+    }
+
+    [Fact]
+    public void MacroDuration_Nested_loop_multipliers_do_not_overflow_int()
+    {
+        var macro = Macro.Create("loop overflow", [new LoopStartStep(50_000), new LoopStartStep(50_000), new DelayStep(1),
+            new LoopEndStep(), new LoopEndStep()]);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(2_500_000_000L), macro.Duration);
+    }
+
+    [Fact]
+    public void MacroDuration_Zero_delays_stay_zero_in_deeply_nested_loops()
+    {
+        var macro = Macro.Create("zero delay", [
+            .. Enumerable.Repeat<MacroStep>(new LoopStartStep(int.MaxValue), 36),
+            new DelayStep(0), new RandomDelayStep(0, 0),
+            .. Enumerable.Repeat<MacroStep>(new LoopEndStep(), 36),
+        ]);
+
+        Assert.Equal(TimeSpan.Zero, macro.Duration);
+    }
+
+    [Fact]
     public void Each_press_of_a_sequence_macro_plays_the_next_action()
     {
         var host = new Host();

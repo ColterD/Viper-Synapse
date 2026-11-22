@@ -101,17 +101,18 @@ public sealed record Macro(Guid Id, string Name, IReadOnlyList<MacroStep> Steps,
         get
         {
             double ms = 0;
-            var multipliers = new Stack<int>();
-            int factor = 1;
+            var multipliers = new Stack<double>();
+            double factor = 1;
             foreach (var step in Steps)
             {
                 switch (step)
                 {
                     case DelayStep d: ms += d.Milliseconds * factor; break;
-                    case RandomDelayStep r: ms += (r.MinMilliseconds + r.MaxMilliseconds) / 2.0 * factor; break;
+                    case RandomDelayStep r: ms += ((double)r.MinMilliseconds + r.MaxMilliseconds) / 2.0 * factor; break;
                     case LoopStartStep l:
                         multipliers.Push(factor);
-                        factor *= Math.Max(1, l.Count);
+                        // Keep zero-length steps at zero even when the loop count exceeds the finite range.
+                        factor = Math.Min(double.MaxValue, factor * Math.Max(1, l.Count));
                         break;
                     case LoopEndStep when multipliers.Count > 0:
                         factor = multipliers.Pop();

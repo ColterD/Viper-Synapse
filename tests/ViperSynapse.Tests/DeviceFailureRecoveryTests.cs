@@ -87,7 +87,7 @@ public class DeviceFailureRecoveryTests
     public void A_failed_current_session_is_stopped_without_affecting_another_device()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-failed-session-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-failed-session-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), sink);
@@ -111,7 +111,7 @@ public class DeviceFailureRecoveryTests
     public void A_stale_node_failure_does_not_stop_a_replacement_session()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-stale-session-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-stale-session-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), sink);
@@ -128,7 +128,7 @@ public class DeviceFailureRecoveryTests
     public void A_failure_from_a_disconnected_device_does_not_stop_a_reconnected_device_on_the_same_port()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-reconnected-session-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-reconnected-session-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), sink);
@@ -148,7 +148,7 @@ public class DeviceFailureRecoveryTests
     public void A_callback_for_a_session_that_was_not_published_is_ignored()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-unpublished-session-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-unpublished-session-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), sink);
@@ -165,7 +165,7 @@ public class DeviceFailureRecoveryTests
     public async Task A_failed_session_is_checked_after_it_is_published_under_the_manager_gate()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-publish-session-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-publish-session-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), sink);
@@ -207,7 +207,7 @@ public class DeviceFailureRecoveryTests
     public void Unchanged_scans_do_not_restart_a_failed_session_or_erase_its_cleanup_error()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-no-restart-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-no-restart-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -235,7 +235,7 @@ public class DeviceFailureRecoveryTests
     public void A_device_without_input_nodes_is_not_reported_as_remapping()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-no-input-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-no-input-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -253,14 +253,14 @@ public class DeviceFailureRecoveryTests
     public void Explicit_settings_apply_retries_a_failed_device()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-explicit-retry-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-explicit-retry-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
             var session = DeviceSession.Start([], new RemapEngine(sink, sink));
             var device = AddDevice(manager, "usb-one", session);
             Assert.True(Retire(manager, device, session));
-            var missing = Path.Combine(root, "missing-input-node");
+            var missing = Path.Join(root, "missing-input-node");
             device.GetType().GetProperty("InputNodes")!.SetValue(device, new List<string> { missing });
 
             manager.Apply("ffff");
@@ -293,7 +293,7 @@ public class DeviceFailureRecoveryTests
     public void A_successful_later_session_update_clears_its_previous_update_error()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-update-recovery-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-update-recovery-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -320,7 +320,7 @@ public class DeviceFailureRecoveryTests
     public void A_successful_session_update_does_not_clear_an_unrelated_device_error()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-other-error-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-other-error-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -338,7 +338,7 @@ public class DeviceFailureRecoveryTests
     public void A_transient_session_update_error_does_not_erase_a_keypad_listener_error()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-listener-update-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-listener-update-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -368,7 +368,7 @@ public class DeviceFailureRecoveryTests
     public void A_session_update_keeps_reporting_a_pending_release_until_output_recovers()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-pending-update-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-pending-update-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -397,7 +397,7 @@ public class DeviceFailureRecoveryTests
     public void An_unchanged_scan_does_not_clear_an_unresolved_update_failure()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-scan-pending-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-scan-pending-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -425,7 +425,7 @@ public class DeviceFailureRecoveryTests
         using var resume = new ManualResetEventSlim();
         using var resumed = new ManualResetEventSlim();
         using var reported = new ManualResetEventSlim();
-        string root = Path.Combine(Path.GetTempPath(), "viper-macro-cleanup-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-macro-cleanup-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -470,7 +470,7 @@ public class DeviceFailureRecoveryTests
         using var resume = new ManualResetEventSlim();
         using var resumed = new ManualResetEventSlim();
         using var reported = new ManualResetEventSlim();
-        string root = Path.Combine(Path.GetTempPath(), "viper-replace-cleanup-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-replace-cleanup-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -510,7 +510,7 @@ public class DeviceFailureRecoveryTests
     public void A_failed_stop_keeps_its_cleanup_warning_when_the_next_start_fails()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-stop-start-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-stop-start-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -520,7 +520,7 @@ public class DeviceFailureRecoveryTests
             engine.Key(30, 1);
             sink.FailReleases = true;
             Assert.True(Retire(manager, device, session));
-            device.GetType().GetProperty("InputNodes")!.SetValue(device, new List<string> { Path.Combine(root, "missing") });
+            device.GetType().GetProperty("InputNodes")!.SetValue(device, new List<string> { Path.Join(root, "missing") });
             manager.Apply("ffff");
             Assert.Contains(manager.Devices, d => d.Problem!.Contains("Could not take over") && d.Problem.Contains("simulated release failure"));
         }
@@ -535,7 +535,7 @@ public class DeviceFailureRecoveryTests
     public void A_session_update_keeps_reporting_a_pending_sync_until_output_recovers()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-pending-sync-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-pending-sync-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(StoreWithBinding(root), sink);
@@ -561,9 +561,9 @@ public class DeviceFailureRecoveryTests
     public void Starting_a_replacement_firmware_listener_clears_the_previous_buttons_state()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-new-listener-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-new-listener-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string path = Path.Combine(root, "hidraw-test");
+        string path = Path.Join(root, "hidraw-test");
         File.WriteAllBytes(path, []);
         try
         {
@@ -587,7 +587,7 @@ public class DeviceFailureRecoveryTests
     public void Incomplete_discovery_does_not_interrupt_an_existing_shortcut_session_on_rescan()
     {
         var sink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-shortcut-rescan-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-shortcut-rescan-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), sink);
@@ -613,7 +613,7 @@ public class DeviceFailureRecoveryTests
     {
         var firstSink = new Sink();
         var secondSink = new Sink();
-        string root = Path.Combine(Path.GetTempPath(), "viper-disposed-sink-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-disposed-sink-" + Guid.NewGuid().ToString("N"));
         try
         {
             var manager = new DeviceManager(new SettingsStore(root), new Sink());
