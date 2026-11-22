@@ -203,16 +203,17 @@ public sealed class DeviceDrawing : Control
         At("Right Click", new Rect(84, 20, 52, 80), false);
         At("Scroll Click", new Rect(66, 40, 18, 34), true);
         var side = device.Rows.Where(r => r.Key.Group == "side").ToList();
+        const double sideCellSize = 44;
         for (int i = 0; i < side.Count; i++)
         {
             int gridColumn = i % 3;
             int gridRow = i / 3;
-            _keys.Add(new KeyShape(side[i], new Rect(200 + gridColumn * 44, 40 + gridRow * 44, 38, 38), 0, false));
+            _keys.Add(new KeyShape(side[i], new Rect(200 + gridColumn * sideCellSize, 40 + gridRow * sideCellSize, 38, 38), 0, false));
         }
         if (side.Count > 0)
         {
             int gridRowCount = (side.Count + 2) / 3;
-            _body.Add((new RectangleGeometry(new Rect(188, 28, 3 * 44 + 10, gridRowCount * 44 + 10), 14, 14), BodyFill, BodyPen));
+            _body.Add((new RectangleGeometry(new Rect(188, 28, 3 * sideCellSize + 10, gridRowCount * sideCellSize + 10), 14, 14), BodyFill, BodyPen));
         }
     }
 
@@ -283,12 +284,13 @@ public sealed class DeviceDrawing : Control
 
     void LayoutGrid(DeviceViewModel device)
     {
+        const double gridCellSize = 56;
         int i = 0;
         foreach (var row in device.Rows)
         {
             int gridColumn = i % 8;
             int gridRow = i / 8;
-            _keys.Add(new KeyShape(row, new Rect(gridColumn * 56, gridRow * 56, 50, 50), 0, false));
+            _keys.Add(new KeyShape(row, new Rect(gridColumn * gridCellSize, gridRow * gridCellSize, 50, 50), 0, false));
             i++;
         }
     }
