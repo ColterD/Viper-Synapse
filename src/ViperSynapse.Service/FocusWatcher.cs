@@ -86,7 +86,7 @@ public sealed class FocusWatcher : IDisposable
 
     async Task<bool> StartKWinAsync(string address)
     {
-        var path = Path.Combine(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is { Length: > 0 } runtime ? runtime : Path.GetTempPath(),
+        var path = Path.Join(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is { Length: > 0 } runtime ? runtime : Path.GetTempPath(),
             $"viper-synapse-focus-{Environment.UserName}.js");
         try
         {
