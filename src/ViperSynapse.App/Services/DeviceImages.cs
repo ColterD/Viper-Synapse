@@ -34,8 +34,8 @@ public static class DeviceImages
     {
         var cache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
         if (string.IsNullOrEmpty(cache))
-            cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache");
-        return Path.Combine(cache, "viper-synapse", "images");
+            cache = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache");
+        return Path.Join(cache, "viper-synapse", "images");
     }
 
     /// <summary>A file that will not decode (cut short, not a picture) is thrown away so the next start fetches it again.
@@ -85,7 +85,7 @@ public static class DeviceImages
     static async Task<Bitmap?> LoadAsync(ushort productId, string url)
     {
         // The file name is ours (product id + a checked extension), never taken from the server.
-        var file = Path.Combine(CacheDir(), $"{productId:x4}{Path.GetExtension(new Uri(url).AbsolutePath).ToLowerInvariant()}");
+        var file = Path.Join(CacheDir(), $"{productId:x4}{Path.GetExtension(new Uri(url).AbsolutePath).ToLowerInvariant()}");
         try
         {
             if (!File.Exists(file))

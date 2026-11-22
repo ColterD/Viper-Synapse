@@ -7,7 +7,7 @@ namespace ViperSynapse.App.Services;
 /// $XDG_CONFIG_HOME/viper-synapse/app.json.</summary>
 public sealed record AppPreferences(bool CloseToTray = true, bool StartMinimized = true, bool Notifications = true)
 {
-    static string FilePath => Path.Combine(Autostart.ConfigHome(), "viper-synapse", "app.json");
+    static string FilePath => Path.Join(Autostart.ConfigHome(), "viper-synapse", "app.json");
 
     /// <summary>Read before the UI thread starts; a missing or unreadable file gives the defaults.</summary>
     public static AppPreferences Load()
@@ -55,21 +55,21 @@ public static class Autostart
     {
         var config = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         return string.IsNullOrEmpty(config)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config")
+            ? Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config")
             : config;
     }
 
-    static string EntryPath => Path.Combine(ConfigHome(), "autostart", "viper-synapse.desktop");
+    static string EntryPath => Path.Join(ConfigHome(), "autostart", "viper-synapse.desktop");
 
     public static bool IsEnabled => File.Exists(EntryPath);
 
     /// <summary>The program to start: the installed launcher when there is one, else this very binary.</summary>
     static string Program()
     {
-        var self = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "viper-synapse");
+        var self = Environment.ProcessPath ?? Path.Join(AppContext.BaseDirectory, "viper-synapse");
         foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries))
         {
-            var candidate = Path.Combine(dir, "viper-synapse");
+            var candidate = Path.Join(dir, "viper-synapse");
             if (File.Exists(candidate) && Path.GetFullPath(candidate) != Path.GetFullPath(self))
                 return candidate;
         }

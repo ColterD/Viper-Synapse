@@ -219,10 +219,11 @@ public class LoopbackTests
         var sourceNode = WaitForNode(source);
 
         var engine = new RemapEngine(output, new NoHost()) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C)) };
-        var session = DeviceSession.Start([sourceNode], engine);
-        source.Key(A, 1); source.Sync();
-        Assert.Equal(["KEY_C:1"], ReadKeys(outputNode, 1));
-        session.Dispose();
+        using (DeviceSession.Start([sourceNode], engine))
+        {
+            source.Key(A, 1); source.Sync();
+            Assert.Equal(["KEY_C:1"], ReadKeys(outputNode, 1));
+        }
         Assert.Equal(["KEY_C:0"], ReadKeys(outputNode, 1));
 
         // The grab is gone: someone else can take the source now.

@@ -55,9 +55,9 @@ public class KeypadListenerOwnershipTests
     [Fact]
     public async Task A_listener_opened_for_a_removed_device_is_not_published_and_is_closed()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-orphan-listener-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-orphan-listener-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string path = Path.Combine(root, "hidraw-test");
+        string path = Path.Join(root, "hidraw-test");
         Assert.Equal(0, MakeFifo(path, 0x180)); // 0600
         try
         {
@@ -78,13 +78,9 @@ public class KeypadListenerOwnershipTests
             {
                 await started;
             }
-            var orphan = (KeypadButtons?)buttonsProperty.GetValue(device);
-            try
-            {
-                Assert.Null(orphan);
-                Assert.Equal(0, OpenHandles(path));
-            }
-            finally { orphan?.Dispose(); }
+            using var orphan = (KeypadButtons?)buttonsProperty.GetValue(device);
+            Assert.Null(orphan);
+            Assert.Equal(0, OpenHandles(path));
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
@@ -92,9 +88,9 @@ public class KeypadListenerOwnershipTests
     [Fact]
     public void A_queued_keymap_report_for_a_removed_device_does_not_change_settings()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-stale-keymap-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-stale-keymap-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string path = Path.Combine(root, "hidraw-test");
+        string path = Path.Join(root, "hidraw-test");
         File.WriteAllBytes(path, []);
         try
         {
@@ -117,9 +113,9 @@ public class KeypadListenerOwnershipTests
     [Fact]
     public void An_unexpected_listener_exit_is_reported_and_not_restarted_automatically()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-listener-exit-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-listener-exit-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string path = Path.Combine(root, "hidraw-test");
+        string path = Path.Join(root, "hidraw-test");
         File.WriteAllBytes(path, []);
         try
         {
@@ -137,13 +133,13 @@ public class KeypadListenerOwnershipTests
     [Fact]
     public void An_unexpected_start_failure_releases_the_starting_guard_and_preserves_the_error()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-listener-start-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-listener-start-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), new Sink());
             var (device, _) = AddDevice(manager);
-            var node = new HidrawNode(Path.Combine(root, "hidraw-test"), 0x1532, 0x02eb, 1, "Tartarus", "usb-test/input1");
+            var node = new HidrawNode(Path.Join(root, "hidraw-test"), 0x1532, 0x02eb, 1, "Tartarus", "usb-test/input1");
             Func<string, Action<bool>, Action<int>, Action<KeypadButtons>, KeypadButtons> fail =
                 (_, _, _, _) => throw new InvalidOperationException("simulated thread-start failure");
             var start = typeof(DeviceManager).GetMethod("StartButtonsUsing", Private);
@@ -161,10 +157,10 @@ public class KeypadListenerOwnershipTests
     [Fact]
     public async Task A_replacement_waits_until_the_old_listeners_final_callback_finishes()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-old-listener-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-old-listener-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        string path = Path.Combine(root, "hidraw-fifo");
-        string replacementPath = Path.Combine(root, "hidraw-replacement");
+        string path = Path.Join(root, "hidraw-fifo");
+        string replacementPath = Path.Join(root, "hidraw-replacement");
         Assert.Equal(0, MakeFifo(path, 0x180));
         File.WriteAllBytes(replacementPath, []);
         using var entered = new ManualResetEventSlim();
