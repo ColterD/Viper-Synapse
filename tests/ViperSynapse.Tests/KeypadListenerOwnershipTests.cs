@@ -78,13 +78,9 @@ public class KeypadListenerOwnershipTests
             {
                 await started;
             }
-            var orphan = (KeypadButtons?)buttonsProperty.GetValue(device);
-            try
-            {
-                Assert.Null(orphan);
-                Assert.Equal(0, OpenHandles(path));
-            }
-            finally { orphan?.Dispose(); }
+            using var orphan = (KeypadButtons?)buttonsProperty.GetValue(device);
+            Assert.Null(orphan);
+            Assert.Equal(0, OpenHandles(path));
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

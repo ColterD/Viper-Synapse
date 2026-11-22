@@ -616,7 +616,7 @@ public class DeviceFailureRecoveryTests
         string root = Path.Join(Path.GetTempPath(), "viper-disposed-sink-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var manager = new DeviceManager(new SettingsStore(root), new Sink());
+            using var manager = new DeviceManager(new SettingsStore(root), new Sink());
             try
             {
                 var firstEngine = new RemapEngine(firstSink, firstSink);
@@ -632,7 +632,7 @@ public class DeviceFailureRecoveryTests
                 Assert.Contains(((ushort)30, 0), secondSink.Events);
                 Assert.Contains(manager.Devices, d => d.Port == "usb-first" && d.Problem != null);
             }
-            finally { firstSink.FailDisposedReleases = false; manager.Dispose(); }
+            finally { firstSink.FailDisposedReleases = false; }
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

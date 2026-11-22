@@ -219,7 +219,7 @@ public class LoopbackTests
         var sourceNode = WaitForNode(source);
 
         var engine = new RemapEngine(output, new NoHost()) { Keymap = Keymap.Empty("k").With(A, new KeyboardBinding(C)) };
-        using (var session = DeviceSession.Start([sourceNode], engine))
+        using (DeviceSession.Start([sourceNode], engine))
         {
             source.Key(A, 1); source.Sync();
             Assert.Equal(["KEY_C:1"], ReadKeys(outputNode, 1));
