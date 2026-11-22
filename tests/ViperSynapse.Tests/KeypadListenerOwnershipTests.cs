@@ -74,7 +74,7 @@ public class KeypadListenerOwnershipTests
             lock (gate)
                 devices.Remove("usb-test");
             // The reader is blocked in open(); pairing a writer lets it finish opening after removal.
-            using (var writer = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+            using (new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
             {
                 await started;
             }

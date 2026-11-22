@@ -45,7 +45,7 @@ public sealed class CpuTemperature(string root = "/sys/class/hwmon")
         if (!Directory.Exists(root))
             return null;
         var sensors = Directory.EnumerateDirectories(root)
-            .Select(dir => (Dir: dir, Name: ReadOrEmpty(Path.Combine(dir, "name"))))
+            .Select(dir => (Dir: dir, Name: ReadOrEmpty(Path.Join(dir, "name"))))
             .Where(s => Drivers.Contains(s.Name))
             .OrderBy(s => Array.IndexOf(Drivers, s.Name));
         foreach (var (dir, _) in sensors)
@@ -53,7 +53,7 @@ public sealed class CpuTemperature(string root = "/sys/class/hwmon")
             // The labelled package or control temperature when there is one, else the first input.
             var labelled = Directory.EnumerateFiles(dir, "temp*_label")
                 .FirstOrDefault(l => ReadOrEmpty(l) is "Tctl" or "Tdie" or "Package id 0");
-            var input = labelled != null ? labelled.Replace("_label", "_input", StringComparison.Ordinal) : Path.Combine(dir, "temp1_input");
+            var input = labelled != null ? labelled.Replace("_label", "_input", StringComparison.Ordinal) : Path.Join(dir, "temp1_input");
             if (File.Exists(input))
                 return input;
         }
