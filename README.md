@@ -2,6 +2,11 @@
 
 # Viper Synapse
 
+This is [ColterD’s fork](https://github.com/ColterD/Viper-Synapse) of
+[Viper Synapse by codingncaffeine](https://github.com/codingncaffeine/Viper-Synapse).
+Work in this fork focuses on documenting device coverage, validating changes against real hardware
+where possible, and improving the build and review checks.
+
 A Razer Synapse–style control centre for Razer keyboards, keypads and mice on Linux: key and button
 remapping, Hypershift, macros, lighting, sensitivity stages, polling rate and power settings, in a window
 that feels like the one you know.
@@ -11,6 +16,14 @@ module and no other daemon. Remaps and macros run in user space through evdev an
 same on Wayland and X11.
 
 <p align="center"><img src="assets/screenshots/customize.png" alt="Customize: the key list, the keypad and the binding flyout" width="860"></p>
+
+## Documentation
+
+[Documentation index](docs/README.md)
+
+- [Getting started](docs/getting-started.md) covers building from source, Linux permissions, and common setup problems.
+- [Device support](docs/device-support.md) explains what catalogue entries and hardware tests tell you.
+- [Development](docs/development.md) maps the projects and describes testing and GitHub checks.
 
 ## What it does
 
@@ -50,21 +63,8 @@ Other models in the catalogue are marked as untested in the app until someone co
 
 ## Install
 
-**Arch Linux (AUR):** `viper-synapse-bin` (from the first release on)
-
-**Debian / Ubuntu:** download the `.deb` from the releases page and install it with
-`sudo apt install ./viper-synapse_*.deb`. Tested on Debian 12 and 13 and Ubuntu 22.04 and 24.04.
-
-**Anywhere else:** extract the `linux-x64` tarball and run `./viper-synapse`. Install the udev rule once
-(the packages do this for you):
-
-```sh
-sudo install -m644 70-viper-synapse.rules /etc/udev/rules.d/
-sudo modprobe uinput
-sudo udevadm control --reload && sudo udevadm trigger
-```
-
-The rule gives the logged-in user access to Razer devices and to `/dev/uinput`, nothing more.
+Use the [source setup guide](docs/getting-started.md#build-from-source) to try this fork. Packaged
+builds, when published, appear on the [fork’s Releases page](https://github.com/ColterD/Viper-Synapse/releases).
 
 ## Building
 
