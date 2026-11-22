@@ -74,9 +74,9 @@ public class ControlDiscoveryTests
     {
         if (!OperatingSystem.IsLinux())
             return;
-        string dir = Path.Combine(Path.GetTempPath(), "viper-input-watcher-" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Join(Path.GetTempPath(), "viper-input-watcher-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        string path = Path.Combine(dir, "event-test");
+        string path = Path.Join(dir, "event-test");
         try
         {
             File.WriteAllText(path, "");
@@ -93,9 +93,9 @@ public class ControlDiscoveryTests
     {
         if (!OperatingSystem.IsLinux())
             return;
-        string dir = Path.Combine(Path.GetTempPath(), "viper-input-hotplug-" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Join(Path.GetTempPath(), "viper-input-hotplug-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        string path = Path.Combine(dir, "event-test");
+        string path = Path.Join(dir, "event-test");
         try
         {
             using var created = new ManualResetEventSlim();

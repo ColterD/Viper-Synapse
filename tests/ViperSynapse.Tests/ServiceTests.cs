@@ -13,7 +13,7 @@ namespace ViperSynapse.Tests;
 public class ServiceTests : IDisposable
 {
     const ushort StandIn = 0x0244, A = 30, C = 46;
-    readonly string _config = Path.Combine(Path.GetTempPath(), "viper-synapse-test-" + Guid.NewGuid().ToString("N"));
+    readonly string _config = Path.Join(Path.GetTempPath(), "viper-synapse-test-" + Guid.NewGuid().ToString("N"));
 
     public void Dispose()
     {
@@ -67,7 +67,7 @@ public class ServiceTests : IDisposable
         using var manager = new DeviceManager(new SettingsStore(_config), output);
         manager.Refresh();
         Assert.DoesNotContain(manager.Devices, d => d.ProductId == "0244");
-        Assert.False(File.Exists(Path.Combine(_config, "devices", "0244.json")));
+        Assert.False(File.Exists(Path.Join(_config, "devices", "0244.json")));
     }
 
     [Fact]

@@ -66,7 +66,7 @@ public class DeviceRefreshTests
     [Fact]
     public void An_output_failure_on_one_session_does_not_block_other_devices()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-refresh-test-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-refresh-test-" + Guid.NewGuid().ToString("N"));
         try
         {
             var store = new SettingsStore(root);
@@ -98,7 +98,7 @@ public class DeviceRefreshTests
     [Fact]
     public void A_failed_session_release_does_not_block_stopping_other_devices()
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-refresh-test-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-refresh-test-" + Guid.NewGuid().ToString("N"));
         try
         {
             var store = new SettingsStore(root);
@@ -132,7 +132,7 @@ public class DeviceRefreshTests
     [InlineData(true)]
     public void Input_thread_reads_snapshots_without_waiting_for_the_device_manager_lock(bool readMacros)
     {
-        string root = Path.Combine(Path.GetTempPath(), "viper-refresh-test-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Join(Path.GetTempPath(), "viper-refresh-test-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var manager = new DeviceManager(new SettingsStore(root), new Sink());

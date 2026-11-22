@@ -96,7 +96,7 @@ public class DeviceSessionCleanupTests
         var engine = new RemapEngine(sink, sink);
         engine.Key(30, 1);
         sink.FailReleases = true;
-        string missing = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"missing-viper-{Guid.NewGuid()}");
+        string missing = System.IO.Path.Join(System.IO.Path.GetTempPath(), $"missing-viper-{Guid.NewGuid()}");
 
         var error = Assert.Throws<IOException>(() => DeviceSession.Start([missing], engine));
         Assert.Contains(missing, error.Message);

@@ -7,7 +7,7 @@ namespace ViperSynapse.Tests;
 [Collection("environment")]
 public class AutostartTests : IDisposable
 {
-    readonly string _config = Path.Combine(Path.GetTempPath(), "viper-synapse-autostart-" + Guid.NewGuid().ToString("N"));
+    readonly string _config = Path.Join(Path.GetTempPath(), "viper-synapse-autostart-" + Guid.NewGuid().ToString("N"));
     readonly string? _saved = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
 
     public AutostartTests() => Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _config);
@@ -25,7 +25,7 @@ public class AutostartTests : IDisposable
         Assert.False(Autostart.IsEnabled);
 
         await Autostart.SetAsync(true);
-        var entry = Path.Combine(_config, "autostart", "viper-synapse.desktop");
+        var entry = Path.Join(_config, "autostart", "viper-synapse.desktop");
         Assert.True(Autostart.IsEnabled);
         var text = await File.ReadAllTextAsync(entry, TestContext.Current.CancellationToken);
         Assert.StartsWith("[Desktop Entry]", text);
