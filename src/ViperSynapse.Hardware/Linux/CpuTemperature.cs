@@ -12,7 +12,8 @@ public sealed class CpuTemperature(string root = "/sys/class/hwmon")
     string? _input;
     bool _searched;
     double? _last;
-    long _readAt = long.MinValue;
+    bool _read;
+    long _readAt;
 
     /// <summary>Degrees Celsius, or null when no CPU sensor was found or it cannot be read.</summary>
     public double? Read()
@@ -20,16 +21,17 @@ public sealed class CpuTemperature(string root = "/sys/class/hwmon")
         lock (_gate)
         {
             long now = Environment.TickCount64;
-            if (now - _readAt < 1000)
+            if (_read && now - _readAt < 1000)
                 return _last;
+            _read = true;
             _readAt = now;
-            if (!_searched)
-            {
-                _searched = true;
-                _input = Find();
-            }
             try
             {
+                if (!_searched)
+                {
+                    _input = Find();
+                    _searched = true;
+                }
                 _last = _input != null && int.TryParse(File.ReadAllText(_input).Trim(), out var milli) ? milli / 1000.0 : null;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
