@@ -46,7 +46,8 @@ public sealed class FocusWatcher : IDisposable
 {
     readonly Action<FocusedProgram> _focused;
     readonly CancellationTokenSource _stop = new();
-    DBusConnection? _kwin;
+    sealed record KWinSession(DBusConnection Connection, DirectoryInfo? TemporaryDirectory);
+    KWinSession? _kwin;
 
     public string Method { get; private set; } = "none";
 
@@ -73,6 +74,7 @@ public sealed class FocusWatcher : IDisposable
     // ---- KWin -------------------------------------------------------------------------------------------
 
     const string ScriptName = "viper-synapse-focus";
+    const string FallbackScriptFile = "focus.js";
 
     /// <summary>KWin's script calls the service's ActiveWindow method with the window's class and process id.</summary>
     static string KWinScript() => """
@@ -86,24 +88,50 @@ public sealed class FocusWatcher : IDisposable
 
     async Task<bool> StartKWinAsync(string address)
     {
-        var path = Path.Join(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is { Length: > 0 } runtime ? runtime : Path.GetTempPath(),
-            $"viper-synapse-focus-{Environment.UserName}.js");
+        DBusConnection? connection = null;
+        DirectoryInfo? fallbackDirectory = null;
+        string path;
+        var scriptLoaded = false;
         try
         {
-            await File.WriteAllTextAsync(path, KWinScript()).ConfigureAwait(false);
-            var connection = new DBusConnection(address);
+            if (Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is { Length: > 0 } runtime)
+            {
+                path = Path.Join(runtime, $"viper-synapse-focus-{Environment.UserName}.js");
+                await File.WriteAllTextAsync(path, KWinScript()).ConfigureAwait(false);
+            }
+            else
+            {
+                fallbackDirectory = Directory.CreateTempSubdirectory("viper-synapse-focus-");
+                path = Path.Join(fallbackDirectory.FullName, FallbackScriptFile);
+                await using var script = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
+                    bufferSize: 4096, useAsync: true);
+                await using var writer = new StreamWriter(script);
+                await writer.WriteAsync(KWinScript()).ConfigureAwait(false);
+            }
+
+            connection = new DBusConnection(address);
             await connection.ConnectAsync().ConfigureAwait(false);
             // A script left by an earlier run would report twice.
             await TryCall(connection, "unloadScript", ScriptName).ConfigureAwait(false);
             await connection.CallMethodAsync(Load(connection, path)).ConfigureAwait(false);
+            scriptLoaded = true;
             await connection.CallMethodAsync(Simple(connection, "start")).ConfigureAwait(false);
-            _kwin = connection;
+            _kwin = new KWinSession(connection, fallbackDirectory);
+            connection = null;
+            fallbackDirectory = null;
             return true;
         }
-        catch (Exception e) when (e is DBusErrorReplyException or DBusConnectionException or IOException)
+        catch (Exception e) when (e is DBusErrorReplyException or DBusConnectionException or IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"Linked programs: KWin did not take the focus script ({e.Message}).");
             return false;
+        }
+        finally
+        {
+            if (connection != null)
+                await StopKWinAsync(new KWinSession(connection, fallbackDirectory), scriptLoaded).ConfigureAwait(false);
+            else
+                CleanupKWinFallback(fallbackDirectory);
         }
     }
 
@@ -129,6 +157,39 @@ public sealed class FocusWatcher : IDisposable
     {
         try { await c.CallMethodAsync(Simple(c, member, argument)).ConfigureAwait(false); }
         catch (DBusErrorReplyException) { }
+    }
+
+    static async Task StopKWinAsync(KWinSession session, bool unload)
+    {
+        try
+        {
+            if (unload)
+                await TryCall(session.Connection, "unloadScript", ScriptName).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is DBusConnectionException or IOException)
+        {
+            Console.Error.WriteLine($"Linked programs: could not unload KWin's focus script ({e.Message}).");
+        }
+        finally
+        {
+            try { session.Connection.Dispose(); }
+            finally { CleanupKWinFallback(session.TemporaryDirectory); }
+        }
+    }
+
+    static void CleanupKWinFallback(DirectoryInfo? directory)
+    {
+        if (directory == null)
+            return;
+        try
+        {
+            File.Delete(Path.Join(directory.FullName, FallbackScriptFile));
+            directory.Delete();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Linked programs: could not remove KWin's temporary focus script ({e.Message}).");
+        }
     }
 
     /// <summary>What KWin's script sends, through the service's bus object.</summary>
@@ -230,9 +291,8 @@ public sealed class FocusWatcher : IDisposable
     public void Dispose()
     {
         _stop.Cancel();
-        if (_kwin != null)
-        {
-            _ = TryCall(_kwin, "unloadScript", ScriptName).ContinueWith(_ => _kwin.Dispose(), TaskScheduler.Default);
-        }
+        var kwin = Interlocked.Exchange(ref _kwin, null);
+        if (kwin != null)
+            _ = StopKWinAsync(kwin, unload: true);
     }
 }
