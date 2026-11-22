@@ -80,6 +80,7 @@ public sealed class Animation
     int _cycle = -1, _tick;
     Rgb _cycleA, _cycleB;
 
+    /// <summary>Creates an animation for the supplied effect and ordered LED layout.</summary>
     /// <param name="effect">The effect and its options.</param>
     /// <param name="leds">Where each LED sits; the colours come back in this order.</param>
     /// <param name="random">Randomness (fixed seed in tests).</param>

@@ -12,6 +12,7 @@ public sealed partial class SettingsViewModel : TabViewModel
     readonly bool _ready;
     readonly string _built;
 
+    /// <summary>Creates the settings tab from the preferences and autostart state read at startup.</summary>
     /// <param name="main">The window.</param>
     /// <param name="preferences">Read before the UI thread started.</param>
     /// <param name="startAtLogin">Whether the autostart entry exists, also read before the UI thread started.</param>
