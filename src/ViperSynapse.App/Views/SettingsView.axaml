@@ -4,7 +4,36 @@
              xmlns:services="using:ViperSynapse.App.Services"
              x:Class="ViperSynapse.App.Views.SettingsView"
              x:DataType="vm:SettingsViewModel">
-    <Grid RowDefinitions="44,*">
+    <UserControl.Styles>
+        <Style Selector="Grid.settingsColumns">
+            <Setter Property="MaxWidth" Value="840" />
+        </Style>
+        <Style Selector="StackPanel.settingsFirst">
+            <Setter Property="Grid.ColumnSpan" Value="2" />
+        </Style>
+        <Style Selector="StackPanel.settingsSecond">
+            <Setter Property="Grid.Row" Value="1" />
+            <Setter Property="Grid.ColumnSpan" Value="2" />
+        </Style>
+        <Style Selector="Border.card.settingsCard">
+            <Setter Property="Width" Value="NaN" />
+            <Setter Property="Margin" Value="0" />
+        </Style>
+        <ContainerQuery Name="settings" Query="min-width:1180">
+            <Style Selector="Grid.settingsColumns">
+                <Setter Property="MaxWidth" Value="1280" />
+            </Style>
+            <Style Selector="StackPanel.settingsFirst">
+                <Setter Property="Grid.ColumnSpan" Value="1" />
+            </Style>
+            <Style Selector="StackPanel.settingsSecond">
+                <Setter Property="Grid.Row" Value="0" />
+                <Setter Property="Grid.Column" Value="1" />
+                <Setter Property="Grid.ColumnSpan" Value="1" />
+            </Style>
+        </ContainerQuery>
+    </UserControl.Styles>
+    <Grid RowDefinitions="44,*" Container.Name="settings" Container.Sizing="Width">
         <ListBox Classes="pills" HorizontalAlignment="Center" VerticalAlignment="Center"
                  ItemsSource="{x:Static vm:SettingsViewModel.Pages}" SelectedItem="{Binding SelectedPage}">
             <ListBox.ItemsPanel>
@@ -13,15 +42,16 @@
         </ListBox>
 
         <!-- SYNAPSE -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowSynapse}">
-            <WrapPanel HorizontalAlignment="Center" Margin="20,10">
-                <StackPanel>
-                    <Border Classes="card" Width="440">
+        <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowSynapse}" HorizontalScrollBarVisibility="Disabled">
+            <Grid Classes="settingsColumns" Margin="24,12,24,24" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto"
+                  ColumnSpacing="14" RowSpacing="14">
+                <StackPanel Classes="settingsFirst" Spacing="14">
+                    <Border Classes="card settingsCard">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="heading" Text="AUTO-LAUNCH" />
                             <CheckBox IsChecked="{Binding StartAtLogin}">
                                 <StackPanel>
-                                    <TextBlock Text="Start Viper Synapse automatically when I sign in" />
+                                    <TextBlock Text="Start the app automatically when I sign in" />
                                     <TextBlock Classes="caption" Text="Bindings and macros need the app running." />
                                 </StackPanel>
                             </CheckBox>
@@ -30,7 +60,9 @@
                             <CheckBox IsChecked="{Binding CloseToTray}" Content="Keep running in the tray when the window is closed" />
                         </StackPanel>
                     </Border>
-                    <Border Classes="card" Width="440">
+                </StackPanel>
+                <StackPanel Classes="settingsSecond" Spacing="14">
+                    <Border Classes="card settingsCard">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="heading" Text="NOTIFICATIONS" />
                             <CheckBox IsChecked="{Binding Notifications}">
@@ -43,14 +75,15 @@
                         </StackPanel>
                     </Border>
                 </StackPanel>
-            </WrapPanel>
+            </Grid>
         </ScrollViewer>
 
         <!-- GENERAL -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowGeneral}">
-            <WrapPanel HorizontalAlignment="Center" Margin="20,10">
-                <StackPanel>
-                    <Border Classes="card" Width="440">
+        <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowGeneral}" HorizontalScrollBarVisibility="Disabled">
+            <Grid Classes="settingsColumns" Margin="24,12,24,24" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto"
+                  ColumnSpacing="14" RowSpacing="14">
+                <StackPanel Name="GeneralPreferences" Classes="settingsFirst" Spacing="14">
+                    <Border Classes="card settingsCard">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="heading" Text="Appearance" />
                             <TextBlock Text="App accent" />
@@ -67,39 +100,55 @@
                             </ComboBox>
                         </StackPanel>
                     </Border>
-                    <Border Classes="card" Width="440">
+                    <Border Classes="card settingsCard">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="heading" Text="Language" />
                             <ComboBox ItemsSource="{x:Static vm:SettingsViewModel.Languages}" SelectedItem="{Binding Language}" Width="220" />
                         </StackPanel>
                     </Border>
-                    <Border Classes="card" Width="440">
-                        <StackPanel Spacing="10">
-                            <TextBlock Classes="heading" Text="WHAT'S NEW" />
-                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                <TextBlock Text="View the latest updates in the" VerticalAlignment="Center" />
-                                <Button Classes="link" Content="Release Notes" Click="OpenReleases" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-                    <Border Classes="card" Width="440">
+                    <Border Classes="card settingsCard">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="heading" Text="OFFLINE DIAGNOSTICS" />
                             <Button Name="NagaDpiComparisonButton" Content="Naga Chroma DPI comparison" Click="OpenNagaDpiComparison" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
-                <Border Classes="card" Width="440">
-                    <StackPanel Spacing="10">
-                        <TextBlock Classes="heading" Text="ABOUT" />
-                        <Image Source="/Assets/logo.png" Height="140" HorizontalAlignment="Center" />
-                        <TextBlock Text="{Binding Version}" HorizontalAlignment="Center" Foreground="#CCCCCC" />
-                        <TextBlock HorizontalAlignment="Center" TextAlignment="Center" Classes="caption" TextWrapping="Wrap"
-                                   Text="Free software under the GPL-3.0-or-later. Not affiliated with or endorsed by Razer Inc.&#x0a;Device protocol knowledge from the OpenRazer project." />
-                        <Button Classes="link" Content="View project on GitHub" HorizontalAlignment="Center" Click="OpenProject" />
-                    </StackPanel>
-                </Border>
-            </WrapPanel>
+                <StackPanel Name="GeneralProject" Classes="settingsSecond" Spacing="14">
+                    <Border Classes="card settingsCard">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="heading" Text="What’s new" />
+                            <TextBlock Classes="deviceSectionTitle" Text="{x:Static services:ProjectLinks.FeaturedReleaseTag}" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Text="This fork release adds Basilisk V4 Pro onboard tools, Device Health, legacy Chroma lighting and remapping, and offline Naga Chroma DPI diagnostics." />
+                            <HyperlinkButton Name="PublishedReleaseNotes" Content="Read release notes" NavigateUri="{x:Static services:ProjectLinks.FeaturedRelease}" />
+                            <HyperlinkButton Name="LatestRelease" Content="Latest release and Linux downloads" NavigateUri="{x:Static services:ProjectLinks.LatestRelease}" />
+                            <HyperlinkButton Content="Release history" NavigateUri="{x:Static services:ProjectLinks.Releases}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card settingsCard">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="heading" Text="About" />
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                                <Image Source="/Assets/icon.png" Width="44" Height="44" />
+                                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                                    <TextBlock Name="AboutAppName" Classes="deviceSectionTitle" Text="{x:Static services:AppBranding.Name}" />
+                                    <TextBlock Name="RunningBuild" Text="{Binding Version}" Classes="caption" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock TextWrapping="Wrap"
+                                       Text="An independent, open-source Linux app for configuring supported Razer devices, including lighting, button mappings, macros, and profiles." />
+                            <TextBlock Classes="deviceDetail" Text="Maintained by ColterD and contributors. Licensed under GPL-3.0-or-later." TextWrapping="Wrap" />
+                            <HyperlinkButton Name="ForkRepository" Content="ColterD/Viper-Synapse on GitHub" NavigateUri="{x:Static services:ProjectLinks.Repository}" />
+                            <HyperlinkButton Content="Documentation library" NavigateUri="{x:Static services:ProjectLinks.Documentation}" />
+                            <HyperlinkButton Content="Report an issue" NavigateUri="{x:Static services:ProjectLinks.Issues}" />
+                            <WrapPanel>
+                                <HyperlinkButton Content="Original Viper Synapse project" NavigateUri="{x:Static services:ProjectLinks.Upstream}" Margin="0,0,8,0" />
+                                <HyperlinkButton Content="OpenRazer protocol reference" NavigateUri="{x:Static services:ProjectLinks.OpenRazer}" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
     </Grid>
 </UserControl>

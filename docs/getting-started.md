@@ -33,7 +33,7 @@ Check the [fork’s Releases page](https://github.com/ColterD/Viper-Synapse/rele
 
 1. Install the package or set up device permissions as described above.
 2. Launch Viper Synapse from your normal desktop session. Connect the device over USB or through its wireless receiver. For Bluetooth, pair and connect it in your Linux desktop settings.
-3. On the Dashboard, select the device under **Devices**. Viper detects devices automatically. If you connected a device and it does not appear, try **Refresh devices** or reconnect it after setting up permissions.
+3. Viper opens on **Devices** and scans automatically. Select a device when it appears. If the scan completes with no devices, check the connection and use **Refresh devices**. If Viper could not scan for devices, use **Retry scan** to reconnect to the service.
 4. Open the device’s **Health** tab to see its model, connection, and what features Viper can use on that connection. Open **Customize** for button mappings and use the other device tabs for features such as lighting or sensitivity where available. For a device with several connection modes, check Health again after switching modes.
 
 Installations from a tarball or source may need to load the `uinput` module again after a reboot for software remapping. Device-specific support and diagnostic commands are listed in [Device support](device-support.md).

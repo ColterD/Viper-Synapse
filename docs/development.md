@@ -13,6 +13,16 @@ Use the .NET 10 SDK and run commands from the repository root. See [Getting star
 | [CLI](../src/ViperSynapse.Cli/) | Terminal tools for listing and probing devices. |
 | [Tests](../tests/ViperSynapse.Tests/) | Automated tests for core, service, app, and hardware behavior. |
 
+## Add a device page
+
+1. Define the page's availability in `DeviceViewModel.BuildPages`. Use model capabilities and connection information to decide when the tab belongs in the list. Use the Health view to explain compatibility limits.
+2. Create an Avalonia `UserControl` under [Views](../src/ViperSynapse.App/Views/) with a typed data context and wire it into `DeviceView.axaml` using the selected page. Use the existing Health and Lighting views for section headings, spacing, and status styles.
+3. Add an emulated test for page availability and the behavior the page exposes. Cover an unsupported connection or missing interface when it changes what a user sees or can do.
+
+## Add a documentation page
+
+Put the Markdown file in `docs/` and add it to the [documentation library](README.md). Use the labels readers see in the app, and state the model and connection for device-specific instructions. Link prerequisites and related guides with relative paths so they work in GitHub and a local checkout.
+
 ## Run tests and build packages
 
 ```sh
