@@ -1,4 +1,4 @@
-# Using Viper Synapse
+# Using Viper Relay
 
 ## Find and inspect a device
 
@@ -11,6 +11,8 @@
 1. Open the device tab and select **Customize**.
 2. Open the **•••** menu next to the profile selector and choose **Add profile**.
 3. The app selects the new profile automatically. Choose a control, select an assignment, and click **Save** in the binding editor.
+
+The binding editor shows the profile and keymap it opened for. If a game changes the active profile, the draft stays with its original target. After a save, the device header distinguishes the saved software profile from the selected unit's firmware result. Use **Retry** when available after a failed save or firmware command.
 
 **Linked Games** manages profile switching for supported running applications. If you want to change settings stored on the device, open **Onboard**, confirm the target unit and slot, and use the available slot controls. Backup and restore cover the settings shown for that unit.
 

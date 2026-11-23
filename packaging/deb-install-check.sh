@@ -34,7 +34,7 @@ done
 [ $problems = 1 ] || echo "ok   every shipped library resolves"
 
 v=$(/usr/bin/viper-synapse --version 2>&1 | head -1)
-case $v in "Viper Synapse"*) echo "ok   viper-synapse --version: $v" ;; *) echo "FAIL viper-synapse --version said: $v"; problems=1 ;; esac
+case $v in "Viper Relay "*) echo "ok   viper-synapse --version: $v" ;; *) echo "FAIL viper-synapse --version said: $v"; problems=1 ;; esac
 if /usr/bin/viper-cli list > /tmp/cli.log 2>&1; then echo "ok   viper-cli list runs (no devices in a container)"; else echo "FAIL viper-cli list: $(head -3 /tmp/cli.log)"; problems=1; fi
 
 # The window, on a virtual screen with a private bus: it must start and still be running after 10 seconds.

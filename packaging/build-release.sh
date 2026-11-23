@@ -88,10 +88,10 @@ Priority: optional
 Architecture: amd64
 Installed-Size: $INSTALLED_KB
 Depends: libc6, libgcc-s1, libstdc++6, libicu76 | libicu74 | libicu72 | libicu70, libfontconfig1, libfreetype6, libx11-6, libx11-xcb1, libxcb1, libxi6, libxcursor1, libxext6, libxrandr2, libxrender1, libice6, libsm6, libegl1, libgl1, libwayland-client0, libxkbcommon0, zlib1g, udev
-Maintainer: Viper Synapse <codingncaffeine@users.noreply.github.com>
-Homepage: https://github.com/codingncaffeine/Viper-Synapse
+Maintainer: Viper Relay maintainers <ColterD@users.noreply.github.com>
+Homepage: https://github.com/ColterD/Viper-Synapse
 Description: Razer device settings: key bindings, macros, lighting and sensitivity
- Viper Synapse controls Razer keyboards, keypads and mice in a window modelled on
+ Viper Relay controls Razer keyboards, keypads and mice in a window modelled on
  Razer Synapse: rebind any key (keyboard and mouse functions, turbo, Hypershift,
  text, programs), record and edit macros, set lighting effects, sensitivity stages
  and polling rate, keep profiles and switch them with the program in front.

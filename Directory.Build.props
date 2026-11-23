@@ -19,9 +19,9 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Product>Viper Synapse</Product>
-    <Company>Viper Synapse</Company>
-    <Authors>codingncaffeine</Authors>
+    <Product>Viper Relay</Product>
+    <Company>Viper Relay</Company>
+    <Authors>codingncaffeine;ColterD and contributors</Authors>
     <Copyright>Copyright (C) 2026 Viper Synapse contributors</Copyright>
     <VersionPrefix>0.0.8</VersionPrefix>
   </PropertyGroup>
