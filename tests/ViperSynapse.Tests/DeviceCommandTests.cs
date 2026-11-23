@@ -56,6 +56,10 @@ public class DeviceCommandTests
     {
         Assert.Equal("0f 04 [03] 01 04 ff", Hex(DeviceCommands.Brightness(0x1F, 0x04, 100)));
         Assert.Equal("0f 04 [03] 01 04 80", Hex(DeviceCommands.Brightness(0x1F, 0x04, 50)));
+        Assert.Equal((byte)26, DeviceCommands.BrightnessValue(10));
+        Assert.Equal((byte)252, DeviceCommands.BrightnessValue(99));
+        Assert.Equal((byte)0, DeviceCommands.BrightnessValue(int.MinValue));
+        Assert.Equal((byte)255, DeviceCommands.BrightnessValue(int.MaxValue));
     }
 
     [Fact]

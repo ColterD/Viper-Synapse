@@ -148,8 +148,9 @@ public static class DeviceCommands
     public static RazerReport Brightness(byte tid, byte led, int percent, byte store = VarStore) =>
         BrightnessRaw(tid, led, BrightnessValue(percent), store);
 
+    // The value is nonnegative after clamping, so adding half the divisor rounds ties up.
     public static byte BrightnessValue(int percent) =>
-        (byte)Math.Round(Math.Clamp(percent, 0, 100) * 255 / 100.0, MidpointRounding.AwayFromZero);
+        (byte)((Math.Clamp(percent, 0, 100) * 255 + 50) / 100);
 
     public static RazerReport BrightnessRaw(byte tid, byte led, byte value, byte store) =>
         RazerReport.Create(tid, 0x0F, 0x04, store, led, value);
