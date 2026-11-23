@@ -112,13 +112,15 @@ public sealed partial class OnboardEditorViewModel(
     partial void OnIsBusyChanged(bool value) => NotifyState();
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
-    async Task RefreshAsync()
+    Task RefreshAsync() => RefreshTargetsAsync();
+
+    internal Task RefreshTargetsAsync(IReadOnlyList<DeviceInfo>? snapshot = null)
     {
-        await RunAsync(async () =>
+        return RunAsync(async () =>
         {
             CancelDelete();
             InvalidateArchiveSelection();
-            var devices = await getDevices();
+            var devices = snapshot ?? await getDevices();
             var targets = devices.Where(Eligible)
                 .GroupBy(d => d.Serial!, StringComparer.Ordinal).Where(group => group.Count() == 1)
                 .Select(group => group.Single())

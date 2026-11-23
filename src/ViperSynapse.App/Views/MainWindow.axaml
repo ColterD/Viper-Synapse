@@ -2,9 +2,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:ViperSynapse.App.ViewModels"
         xmlns:views="using:ViperSynapse.App.Views"
+        xmlns:services="using:ViperSynapse.App.Services"
         x:Class="ViperSynapse.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Title="Viper Synapse"
+        Title="{x:Static services:AppBranding.Name}"
         Icon="/Assets/icon.png"
         Width="1440" Height="900" MinWidth="1080" MinHeight="680"
         WindowStartupLocation="CenterScreen"
@@ -19,8 +20,8 @@
     </Window.DataTemplates>
 
     <Panel>
-        <Grid RowDefinitions="34,34,*,Auto">
-            <!-- Tabs: SYNAPSE, the devices, LINKED GAMES, MACRO, SETTINGS. Dragging the bar moves the window. -->
+        <Grid RowDefinitions="40,34,*,Auto">
+            <!-- Dragging the tab bar moves the window. -->
             <Border Grid.Row="0" Background="{StaticResource TopBarBrush}" Name="TopBar">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -35,22 +36,18 @@
                         </Button>
                     </StackPanel>
                     <ListBox Classes="topTabs" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}"
-                             HorizontalAlignment="Left" Margin="6,0,0,0">
+                             Margin="6,0,0,0" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                             ScrollViewer.VerticalScrollBarVisibility="Disabled">
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
                         </ListBox.ItemsPanel>
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:TabViewModel">
                                 <StackPanel Orientation="Horizontal" Spacing="9">
-                                    <Panel Width="20" Height="20" VerticalAlignment="Center">
-                                        <Ellipse Fill="{DynamicResource AccentBrush}" IsVisible="{Binding Icon, Converter={x:Static views:Converters.TabInDisc}}" />
-                                        <Image Source="/Assets/icon.png" Width="20" Height="20"
-                                               IsVisible="{Binding Icon, Converter={x:Static views:Converters.Is}, ConverterParameter=Synapse}" />
-                                        <TextBlock Text="{Binding Icon, Converter={x:Static views:Converters.TabGlyph}}" FontSize="12" FontWeight="Bold"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   Foreground="{Binding Icon, Converter={x:Static views:Converters.TabGlyphBrush}}" />
-                                    </Panel>
-                                    <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
+                                    <PathIcon Width="24" Height="24" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}"
+                                              Data="{Binding Icon, Converter={x:Static views:Converters.TabIconGeometry}}" />
+                                    <TextBlock Text="{Binding Header}" VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding Header}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -67,7 +64,21 @@
                 </StackPanel>
                 <TextBlock Grid.Column="1" Classes="title" Text="{Binding Title}" VerticalAlignment="Center" />
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,10,0">
-                    <Button Classes="nav" Content="?" Name="HelpButton" ToolTip.Tip="Help and source code" FontWeight="Bold" />
+                    <Button Classes="nav" Content="?" Name="HelpButton" ToolTip.Tip="Help and documentation"
+                            AutomationProperties.Name="Help and documentation" FontWeight="Bold">
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedRight">
+                                <StackPanel Spacing="6" MinWidth="240">
+                                    <TextBlock Classes="deviceSectionTitle" Text="Help and documentation" />
+                                    <HyperlinkButton Content="Documentation library" NavigateUri="{x:Static services:ProjectLinks.Documentation}" />
+                                    <HyperlinkButton Content="Getting started" NavigateUri="{x:Static services:ProjectLinks.GettingStarted}" />
+                                    <HyperlinkButton Content="Contributor guide" NavigateUri="{x:Static services:ProjectLinks.Development}" />
+                                    <Button Content="Copy documentation link" Click="CopyDocumentationLink" />
+                                    <SelectableTextBlock Name="HelpLinkStatus" Classes="caption" TextWrapping="Wrap" IsVisible="False" />
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
                 </StackPanel>
             </Grid>
 

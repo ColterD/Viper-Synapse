@@ -6,15 +6,7 @@ namespace ViperSynapse.App.Views;
 
 public sealed partial class DeviceView : UserControl
 {
-    public DeviceView()
-    {
-        InitializeComponent();
-        PaintCanvas.KeyPainted += row =>
-        {
-            if (DataContext is DeviceViewModel device)
-                device.Lighting.PaintKey(row.Key);
-        };
-    }
+    public DeviceView() => InitializeComponent();
 
     void ShowLayout(object? sender, RoutedEventArgs e)
     {
@@ -26,11 +18,5 @@ public sealed partial class DeviceView : UserControl
     {
         if (sender is Button { DataContext: StageRow row } && DataContext is DeviceViewModel device)
             device.Performance.Activate(row);
-    }
-
-    void PaintCell(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { DataContext: LedCell cell } && DataContext is DeviceViewModel device)
-            device.Lighting.PaintCell(cell);
     }
 }

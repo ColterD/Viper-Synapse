@@ -23,9 +23,4 @@ public sealed partial class HomeView : UserControl
             _ = top.Launcher.LaunchUriAsync(ProjectLinks.GettingStarted);
     }
 
-    void OpenLinkedGames(object? sender, RoutedEventArgs e) => Home?.OpenLinkedGames();
-
-    void OpenMacros(object? sender, RoutedEventArgs e) => Home?.OpenMacros();
-
-    void OpenSettings(object? sender, RoutedEventArgs e) => Home?.OpenSettings();
 }

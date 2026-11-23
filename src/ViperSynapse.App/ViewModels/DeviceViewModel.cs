@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -57,6 +56,8 @@ public sealed record KeymapItem(int Index, string Name)
 }
 
 public sealed record KeyGroup(string Title, IReadOnlyList<KeyRowViewModel> Keys);
+public sealed record ProfileChoice(Guid Id, string Name);
+
 public sealed record DeviceUnitChoice(string Port, string ProductId, string? Serial, string Label);
 
 /// <summary>A line of the key list: a group heading, or one key or two side by side (Synapse 4 runs a long group
@@ -74,6 +75,12 @@ public sealed partial class DeviceViewModel : TabViewModel
     DeviceSettings _settings = DeviceSettings.Create();
     bool _loading;
     bool _controlsReady;
+    bool _detached;
+    readonly DispatcherTimer? _stickPoll;
+    readonly DispatcherTimer? _batteryPoll;
+    long _settingsReadRequest;
+    long _endpointRevision, _reloadSaveRevision;
+    Task? _fullReload, _liveRead;
     IReadOnlyList<ushort> _lastInputControls = [];
     string? _lastInputControlsStatus;
 
@@ -107,22 +114,38 @@ public sealed partial class DeviceViewModel : TabViewModel
         SelectedPage = Pages[0];
         if (HasThumbstick)
         {
-            var watch = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(5) };
-            watch.Tick += (_, _) => KeepWatchingStick();
-            watch.Start();
+            _stickPoll = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(5) };
+            _stickPoll.Tick += (_, _) => KeepWatchingStick();
+            _stickPoll.Start();
         }
         if (Model?.Has("battery") == true)
         {
             // The charge changes on its own: read it again every minute, battery only, so a page being edited is left be.
-            var battery = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(1) };
-            battery.Tick += (_, _) => _ = RefreshBatteryAsync();
-            battery.Start();
+            _batteryPoll = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(1) };
+            _batteryPoll.Tick += (_, _) => _ = RefreshBatteryAsync();
+            _batteryPoll.Start();
         }
-        _ = Services.DeviceImages.LoadAsync(Model).ContinueWith(t =>
+        _ = LoadPhotoAsync();
+    }
+
+    async Task LoadPhotoAsync()
+    {
+        try
         {
-            if (t.Result is { } photo)
-                Dispatcher.UIThread.Post(() => Photo = photo);
-        }, TaskScheduler.Default);
+            if (await DeviceImages.LoadAsync(Model).ConfigureAwait(false) is not { } photo)
+                return;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (_detached)
+                    photo.Dispose();
+                else
+                    Photo = photo;
+            });
+        }
+        catch (Exception e)
+        {
+            System.Diagnostics.Trace.TraceWarning("Could not load device photo: {0}", e.Message);
+        }
     }
 
     internal const string OnboardPage = "ONBOARD";
@@ -154,7 +177,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     long _deviceReadRequest;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UnitScope))]
+    [NotifyPropertyChangedFor(nameof(UnitScope), nameof(DashboardConnection))]
     public partial IReadOnlyList<DeviceUnitChoice> UnitChoices { get; private set; } = [];
 
     [ObservableProperty] public partial DeviceUnitChoice? InspectedUnit { get; set; }
@@ -205,7 +228,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         if (target == null || ReferenceEquals(target, Info))
             return;
         Info = target;
-        _ = ReadDeviceAsync();
+        _ = RefreshLiveStateAsync();
     }
 
     public DeviceModel? Model { get; }
@@ -223,7 +246,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// <summary>The profile in use, shown in green on the dashboard card.</summary>
     public string ProfileName => SelectedProfile?.Name ?? "";
 
-    partial void OnSelectedProfileChanged(Profile? oldValue, Profile? newValue) => OnPropertyChanged(nameof(ProfileName));
+    partial void OnSelectedProfileChanged(ProfileChoice? oldValue, ProfileChoice? newValue) => OnPropertyChanged(nameof(ProfileName));
 
     /// <summary>The settings as last read from or sent to the service.</summary>
     public DeviceSettings CurrentSettings => _settings;
@@ -376,13 +399,13 @@ public sealed partial class DeviceViewModel : TabViewModel
     [ObservableProperty]
     public partial string SelectedPage { get; set; }
 
-    public ObservableCollection<Profile> Profiles { get; } = [];
+    [ObservableProperty]
+    public partial IReadOnlyList<ProfileChoice> Profiles { get; private set; } = [];
 
     [ObservableProperty]
-    public partial Profile? SelectedProfile { get; set; }
+    public partial ProfileChoice? SelectedProfile { get; set; }
 
-    /// <summary>Replaced whole on every load: a combo box whose items are cleared under a two-way index binding
-    /// loses its selection.</summary>
+    /// <summary>Stable choices while the displayed index and name are unchanged.</summary>
     [ObservableProperty]
     public partial IReadOnlyList<KeymapItem> Keymaps { get; set; } = [];
 
@@ -484,13 +507,50 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// <summary>While Customize is on screen, keep asking the service to report the stick.</summary>
     void KeepWatchingStick()
     {
-        if (!HasThumbstick || _main.SelectedTab != this || !IsCustomize)
-            return;
-        _ = Task.Run(async () =>
+        if (!_detached && HasThumbstick && _main.SelectedTab == this && IsCustomize)
+            _ = WatchStickAsync();
+    }
+
+    async Task WatchStickAsync()
+    {
+        try { await _main.Client.WatchStickAsync(Key).ConfigureAwait(false); }
+        catch (Exception e) when (e is Tmds.DBus.Protocol.DBusErrorReplyException or InvalidOperationException) { }
+    }
+
+    internal bool IsPolling => _stickPoll?.IsEnabled == true || _batteryPoll?.IsEnabled == true;
+
+    internal void FlushPendingEdits()
+    {
+        var settings = MergePendingEdits(_settings);
+        if (!ReferenceEquals(settings, _settings))
+            Push(settings);
+    }
+
+    DeviceSettings MergePendingEdits(DeviceSettings settings)
+    {
+        // The pending controls still belong to the old profile, even when the incoming profile has changed.
+        var lighting = Lighting.TakePendingSettings();
+        var performance = Performance.TakePendingSettings();
+        if (lighting is null && performance is null ||
+            settings.Profiles.FirstOrDefault(p => p.Id == _settings.ActiveProfile) is not { } original)
+            return settings;
+
+        var revised = original with
         {
-            try { await _main.Client.WatchStickAsync(Key).ConfigureAwait(false); }
-            catch (Exception e) when (e is Tmds.DBus.Protocol.DBusErrorReplyException or InvalidOperationException) { }
-        });
+            Lighting = lighting ?? original.Lighting,
+            Performance = performance ?? original.Performance,
+        };
+        return settings with { Profiles = settings.Profiles.Select(p => p.Id == revised.Id ? revised : p).ToArray() };
+    }
+
+    internal void Detach()
+    {
+        FlushPendingEdits();
+        _detached = true;
+        _stickPoll?.Stop();
+        _batteryPoll?.Stop();
+        InvalidateLiveReads();
+        ++_settingsReadRequest;
     }
 
     partial void OnSelectedPageChanged(string value)
@@ -508,10 +568,10 @@ public sealed partial class DeviceViewModel : TabViewModel
         RefreshOnboard();
     }
 
-    internal void RefreshOnboard()
+    internal void RefreshOnboard(IReadOnlyList<DeviceInfo>? snapshot = null)
     {
-        if (IsOnboardPage && Onboard.RefreshCommand.CanExecute(null))
-            Onboard.RefreshCommand.Execute(null);
+        if (!_detached && IsOnboardPage && Onboard.CanRefresh)
+            _ = Onboard.RefreshTargetsAsync(snapshot);
     }
 
     [ObservableProperty]
@@ -557,9 +617,12 @@ public sealed partial class DeviceViewModel : TabViewModel
     internal async Task RefreshBatteryAsync(Func<string, Task<int?>>? readBluetooth = null,
         Func<string, Task<DeviceState?>>? readUsb = null)
     {
-        if (!HasBattery)
+        var capture = await Dispatcher.UIThread.InvokeAsync<(DeviceInfo Info, long Request)?>(() =>
+            _detached || !HasBattery || (readUsb is null && readBluetooth is null && _liveRead is { IsCompleted: false })
+                ? null : (Info, ++_batteryRequest));
+        if (capture is not { } pending)
             return;
-        var (info, request) = await Dispatcher.UIThread.InvokeAsync(() => (Info, ++_batteryRequest));
+        var (info, request) = pending;
         if (info.Connection == "bluetooth")
         {
             await ReadBluetoothBatteryAsync(info.Port, request, readBluetooth ?? BluetoothBattery.ReadAsync).ConfigureAwait(false);
@@ -567,7 +630,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         }
         try
         {
-            var read = readUsb == null ? _main.Client.GetUnitStateAsync(info) : readUsb(info.Key);
+            var read = readUsb == null ? _main.ReadLiveDeviceAsync(info) : readUsb(info.Key);
             if (await read.ConfigureAwait(false) is { } state && state.BatteryPercent != null)
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -592,6 +655,10 @@ public sealed partial class DeviceViewModel : TabViewModel
         previous.Port == current.Port && previous.Connection == current.Connection &&
         previous.ControlNode == current.ControlNode && previous.Serial == current.Serial;
 
+    public string DashboardConnection => UnitChoices.Count > 1
+        ? $"{UnitChoices.Count} connected units"
+        : DeviceHealth.ConnectionLabel(Info);
+
     public string Status => Info.Problem ?? (Info.Remapping ? "Active" : "Ready");
     public string Details => Info.Connection switch
     {
@@ -611,6 +678,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         OnPropertyChanged(nameof(Status));
         OnPropertyChanged(nameof(Details));
+        OnPropertyChanged(nameof(DashboardConnection));
         OnPropertyChanged(nameof(GenericControlsStatus));
         OnPropertyChanged(nameof(Health));
         if (!_controlsReady)
@@ -618,8 +686,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         bool endpointChanged = !SameBatteryEndpoint(oldValue, newValue) || oldValue.ProductId != newValue.ProductId;
         if (endpointChanged)
         {
-            _batteryRequest++;
-            _deviceReadRequest++;
+            InvalidateLiveReads();
             ShowBattery(null, null);
             _deviceDefaults = null;
             _devicePower = null;
@@ -650,8 +717,8 @@ public sealed partial class DeviceViewModel : TabViewModel
             OnPropertyChanged(nameof(HasScrollFirmware));
             OnPropertyChanged(nameof(HasPollingCard));
         }
-        if (endpointChanged)
-            Load(_settings);
+        if (endpointChanged && _loadedOnce)
+            ApplyLiveDefaults();
     }
 
     IReadOnlyList<string> BuildPages()
@@ -690,17 +757,88 @@ public sealed partial class DeviceViewModel : TabViewModel
         _ => group.ToUpperInvariant(),
     };
 
+    void InvalidateLiveReads()
+    {
+        ++_batteryRequest;
+        ++_deviceReadRequest;
+        ++_endpointRevision;
+        _liveRead = null;
+        _fullReload = null;
+    }
+
     public async Task ReloadAsync()
     {
+        var pending = await Dispatcher.UIThread.InvokeAsync<Task>(() =>
+        {
+            if (_detached)
+                return Task.CompletedTask;
+            long saveRevision = _main.DeviceSaveState(Key).Revision;
+            if (_fullReload is { IsCompleted: false } && _reloadSaveRevision == saveRevision)
+                return _fullReload;
+            _reloadSaveRevision = saveRevision;
+            return _fullReload = ReloadWithLiveStateAsync(_endpointRevision);
+        });
+        await pending.ConfigureAwait(false);
+    }
+
+    async Task ReloadWithLiveStateAsync(long endpointRevision)
+    {
+        if (!await ReloadSettingsAsync(_main.ReadDeviceSettingsAsync).ConfigureAwait(false))
+            return;
+        var pending = await Dispatcher.UIThread.InvokeAsync<Task>(() =>
+            _endpointRevision == endpointRevision ? GetLiveRead() : Task.CompletedTask);
+        await pending.ConfigureAwait(false);
+    }
+
+    async Task RefreshLiveStateAsync()
+    {
+        var pending = await Dispatcher.UIThread.InvokeAsync<Task>(GetLiveRead);
+        await pending.ConfigureAwait(false);
+    }
+
+    Task GetLiveRead()
+    {
+        if (_detached)
+            return Task.CompletedTask;
+        return _liveRead is { IsCompleted: false } ? _liveRead : _liveRead = ReadDeviceAsync();
+    }
+
+    internal async Task<bool> ReloadSettingsAsync(Func<string, Task<DeviceSettings>> readSettings)
+    {
+        var capture = await Dispatcher.UIThread.InvokeAsync<(long Request, long Revision, Task Saved)?>(() =>
+        {
+            if (_detached)
+                return null;
+            var save = _main.DeviceSaveState(Key);
+            return (++_settingsReadRequest, save.Revision, save.Completion);
+        });
+        if (capture is not { } pending)
+            return false;
+
+        bool Current() => !_detached && _settingsReadRequest == pending.Request &&
+            _main.DeviceSaveState(Key).Revision == pending.Revision;
         try
         {
-            var settings = await _main.Client.GetSettingsAsync(Key).ConfigureAwait(false);
-            await Dispatcher.UIThread.InvokeAsync(() => Load(settings, fromService: true));
-            await ReadDeviceAsync().ConfigureAwait(false);
+            await pending.Saved.ConfigureAwait(false);
+            if (!await Dispatcher.UIThread.InvokeAsync(Current))
+                return true;
+
+            var settings = await readSettings(Key).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!Current())
+                    return;
+                var withEdits = settings.ActiveProfile == _settings.ActiveProfile ? settings : MergePendingEdits(settings);
+                Load(withEdits, fromService: true);
+                if (!ReferenceEquals(withEdits, settings))
+                    _main.SaveDeviceSettings(Key, withEdits);
+            });
+            return true;
         }
         catch (Exception e)
         {
-            _main.Fail("Could not read the device settings", e);
+            _main.Fail("Could not read the device settings", e, Current);
+            return false;
         }
     }
 
@@ -723,35 +861,47 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         if (fromService)
             AnnounceOutsideChange(settings);
+        bool keepDrafts = _loadedOnce && _settings.ActiveProfile == settings.ActiveProfile;
         _loadedOnce = true;
         _loading = true;
         try
         {
             _settings = settings;
-            Profiles.Clear();
-            foreach (var p in settings.Profiles)
-                Profiles.Add(p);
-            SelectedProfile = settings.Active;
-            Keymaps = settings.Active.Keymaps.Select((k, i) => new KeymapItem(i, k.Name)).ToList();
+            var profiles = settings.Profiles.Select(profile => new ProfileChoice(profile.Id, profile.Name)).ToArray();
+            if (!Profiles.SequenceEqual(profiles))
+                Profiles = profiles;
+            SelectedProfile = Profiles.FirstOrDefault(profile => profile.Id == settings.Active.Id);
+            var keymaps = settings.Active.Keymaps.Select((keymap, i) => new KeymapItem(i, keymap.Name)).ToArray();
+            if (!Keymaps.SequenceEqual(keymaps))
+            {
+                Keymaps = keymaps;
+                OnPropertyChanged(nameof(SelectedKeymapItem));
+            }
             SelectedKeymap = Math.Clamp(settings.ActiveKeymap, 0, Math.Max(0, Keymaps.Count - 1));
-            // The index often stays 0 across a load, which raises nothing; the box must still re-read its selection.
-            OnPropertyChanged(nameof(SelectedKeymapItem));
             OnPropertyChanged(nameof(QuickRemapped));
             RefreshRows();
             StickMode = settings.Active.Thumbstick;
             Interruption = settings.Active.Interruption;
-            Lighting.Load(settings.Active.Lighting);
-            Performance.Load(settings.Active.Performance ?? _deviceDefaults ?? Core.Lighting.PerformanceSettings.Default);
-            Power.Load(settings.Active.Power ?? _devicePower ?? Core.Lighting.PowerSettings.Default);
-            OnPropertyChanged(nameof(BatteryBrush));
-            ScrollWheel.Load(settings.Active.Scroll ?? _deviceScroll ?? Core.Lighting.ScrollSettings.Default, _deviceWheelMode);
-            Calibration.Load(settings.Active.Calibration ?? new Core.Lighting.CalibrationSettings(_liftOff));
+            if (!keepDrafts || !Lighting.HasPendingEdits)
+                Lighting.Load(settings.Active.Lighting);
+            ApplyLiveDefaults(keepDrafts);
         }
         finally
         {
             _loading = false;
         }
         _main.Macros.KeymapsChanged();
+    }
+
+    void ApplyLiveDefaults(bool keepDrafts = true)
+    {
+        var profile = _settings.Active;
+        if (!keepDrafts || !Performance.HasPendingEdits)
+            Performance.Load(profile.Performance ?? _deviceDefaults ?? Core.Lighting.PerformanceSettings.Default);
+        Power.Load(profile.Power ?? _devicePower ?? Core.Lighting.PowerSettings.Default);
+        OnPropertyChanged(nameof(BatteryBrush));
+        ScrollWheel.Load(profile.Scroll ?? _deviceScroll ?? Core.Lighting.ScrollSettings.Default, _deviceWheelMode);
+        Calibration.Load(profile.Calibration ?? new Core.Lighting.CalibrationSettings(_liftOff));
     }
 
     Core.Lighting.PerformanceSettings? _deviceDefaults;
@@ -764,21 +914,26 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// changes anything.</summary>
     internal async Task ReadDeviceAsync(Func<DeviceInfo, Task<DeviceState?>>? readUsb = null)
     {
+        var capture = await Dispatcher.UIThread.InvokeAsync<(DeviceInfo Info, long Battery, long State)?>(() =>
+            _detached ? null : (Info, ++_batteryRequest, ++_deviceReadRequest));
+        if (capture is not { } pending)
+            return;
+        var (info, batteryRequest, deviceRequest) = pending;
+        bool Current() => !_detached && _deviceReadRequest == deviceRequest;
         try
         {
-            var (info, batteryRequest, deviceRequest) = await Dispatcher.UIThread.InvokeAsync(() => (Info, ++_batteryRequest, ++_deviceReadRequest));
             if (info.Connection == "bluetooth")
             {
                 if (HasBattery)
                     await ReadBluetoothBatteryAsync(info.Port, batteryRequest, BluetoothBattery.ReadAsync).ConfigureAwait(false);
                 return;
             }
-            var read = readUsb ?? _main.Client.GetUnitStateAsync;
+            var read = readUsb ?? _main.ReadLiveDeviceAsync;
             if (await read(info).ConfigureAwait(false) is not { } state)
                 return;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (_deviceReadRequest != deviceRequest)
+                if (!Current())
                     return;
                 // A keypad reports a polling rate and no stages; its rate is still the device's own value.
                 if (state.Stages is { Count: > 0 } || state.PollingRate > 0)
@@ -792,12 +947,15 @@ public sealed partial class DeviceViewModel : TabViewModel
                 if (state.ScrollAcceleration != null || state.SmartReel != null)
                     _deviceScroll = new Core.Lighting.ScrollSettings(1, state.ScrollAcceleration == true, state.SmartReel == true);
                 _deviceWheelMode = state.WheelMode;
-                Load(_settings);
+                if (_loadedOnce)
+                    ApplyLiveDefaults();
+                else
+                    Load(_settings);
             });
         }
         catch (Exception e)
         {
-            _main.Fail("Could not read the device", e);
+            _main.Fail("Could not read the device", e, Current);
         }
     }
 
@@ -862,7 +1020,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         Editor = new BindingEditorViewModel(row, binding, _main.MacroLibrary, _settings.Profiles, Keymaps.Count, Save, () => SelectedKey = null);
     }
 
-    partial void OnSelectedProfileChanged(Profile? value)
+    partial void OnSelectedProfileChanged(ProfileChoice? value)
     {
         if (_loading || value == null || value.Id == _settings.ActiveProfile)
             return;
@@ -982,11 +1140,9 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// <summary>Shows the change at once and sends it to the service, which saves and applies it.</summary>
     void Push(DeviceSettings settings)
     {
+        if (settings.ActiveProfile != _settings.ActiveProfile)
+            settings = MergePendingEdits(settings);
         Load(settings);
-        _ = Task.Run(async () =>
-        {
-            try { await _main.Client.SetSettingsAsync(Key, settings).ConfigureAwait(false); }
-            catch (Exception e) { _main.Fail("Could not save the device settings", e); }
-        });
+        _main.SaveDeviceSettings(Key, settings);
     }
 }

@@ -3,7 +3,6 @@
              xmlns:vm="using:ViperSynapse.App.ViewModels"
              xmlns:views="using:ViperSynapse.App.Views"
              xmlns:controls="using:ViperSynapse.App.Controls"
-             xmlns:bindings="using:ViperSynapse.Core.Bindings"
              x:Class="ViperSynapse.App.Views.DeviceView"
              x:DataType="vm:DeviceViewModel">
     <UserControl.Styles>
@@ -17,9 +16,9 @@
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" VerticalAlignment="Center"
                         IsVisible="{Binding !IsOnboardPage}">
                 <TextBlock Classes="headerIcon" Text="◎" ToolTip.Tip="Profile" />
-                <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" Width="190">
+                <ComboBox Name="DeviceProfileBox" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" Width="190">
                     <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="bindings:Profile"><TextBlock Text="{Binding Name}" /></DataTemplate>
+                        <DataTemplate x:DataType="vm:ProfileChoice"><TextBlock Text="{Binding Name}" /></DataTemplate>
                     </ComboBox.ItemTemplate>
                 </ComboBox>
                 <Button Classes="flat" Content="•••" ToolTip.Tip="Profile options">
@@ -285,99 +284,8 @@
             </Panel>
         </Grid>
 
-        <!-- LIGHTING -->
-        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}">
-            <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Lighting}" x:DataType="vm:LightingViewModel">
-                <!-- Left column: Brightness, Switch off lighting. -->
-                <StackPanel>
-                    <Border Classes="card" Width="440">
-                        <StackPanel Spacing="12">
-                            <StackPanel Orientation="Horizontal" Spacing="10">
-                                <TextBlock Classes="heading" Text="BRIGHTNESS" VerticalAlignment="Center" />
-                                <ToggleSwitch IsChecked="{Binding LightingOn}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
-                            </StackPanel>
-                            <controls:ValueSlider Value="{Binding Brightness}" Minimum="0" Maximum="100"
-                                                  IsEnabled="{Binding LightingOn}" IsVisible="{Binding ShowBrightness}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Classes="card" Width="440">
-                        <StackPanel Spacing="10">
-                            <TextBlock Classes="heading" Text="SWITCH OFF LIGHTING" />
-                            <CheckBox Content="When display is turned off" IsChecked="{Binding OffWhenDisplayOff}" />
-                            <CheckBox Content="When idle for (minutes)" IsChecked="{Binding OffWhenIdle}" />
-                            <controls:ValueSlider Value="{Binding IdleMinutes}" Minimum="1" Maximum="15" IsEnabled="{Binding OffWhenIdle}" Margin="26,0,0,0" />
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-                <Border Classes="card" Width="440">
-                    <StackPanel Spacing="10">
-                        <TextBlock Classes="heading" Text="EFFECTS" />
-                        <ListBox Name="FrameEffectTabs" Classes="segmentList" ItemsSource="{x:Static vm:LightingViewModel.EffectTabs}" SelectedItem="{Binding EffectTab, Mode=TwoWay}"
-                                 IsVisible="{Binding HasFrame}" HorizontalAlignment="Left">
-                            <ListBox.ItemsPanel>
-                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
-                            </ListBox.ItemsPanel>
-                        </ListBox>
-                        <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding ShowQuick}"
-                                   Text="Quick effects are presets that are saved to the device's profile and can be applied to your other Razer devices." />
-                        <StackPanel Spacing="8" IsVisible="{Binding HasZones}">
-                            <CheckBox Content="Same effect on every zone" IsChecked="{Binding SyncAll}"
-                                      IsVisible="{Binding ShowZoneSync}" />
-                            <TextBlock Classes="caption" Text="ZONE" />
-                            <ComboBox ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone}" HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="x:String"><TextBlock Text="{Binding Converter={x:Static views:Converters.ZoneLabel}}" /></DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding ShowQuick}">
-                            <ComboBox ItemsSource="{Binding QuickEffects}" SelectedItem="{Binding SelectedEffect}" Width="200" />
-                            <Button Classes="link" Content="Apply to other devices" Command="{Binding ApplyToOtherDevicesCommand}" VerticalAlignment="Center" />
-                        </StackPanel>
-                        <TextBlock Foreground="#AAAAAA" FontSize="12" TextWrapping="Wrap" Text="{Binding EffectHint}"
-                                   IsVisible="{Binding EffectHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <ComboBox ItemsSource="{Binding ColorModes}" SelectedItem="{Binding ColorModeChoice}" HorizontalAlignment="Stretch" IsVisible="{Binding ShowModes}" />
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <ColorPicker Color="{Binding Color1}" IsVisible="{Binding ShowColor1}" />
-                            <ColorPicker Color="{Binding Color2}" IsVisible="{Binding ShowColor2}" />
-                        </StackPanel>
-                        <StackPanel Spacing="4" IsVisible="{Binding ShowSpeed}">
-                            <TextBlock Classes="caption" Text="SPEED" />
-                            <Slider Minimum="1" Maximum="3" IsSnapToTickEnabled="True" TickFrequency="1" Value="{Binding Speed}" />
-                        </StackPanel>
-                        <CheckBox Content="Reverse direction" IsChecked="{Binding Reverse}" IsVisible="{Binding ShowDirection}" />
-                    </StackPanel>
-                </Border>
-                <Border Classes="card" Width="780" IsVisible="{Binding ShowFrameEditor}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Classes="heading" Text="PER-KEY COLOURS" IsVisible="{Binding !IsMouseLighting}" />
-                        <TextBlock Classes="heading" Text="PER-LED COLOURS" IsVisible="{Binding IsMouseLighting}" />
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <ColorPicker Color="{Binding PaintColor}" />
-                            <Button Classes="cancel" Content="FILL ALL" Command="{Binding FillAllCommand}" />
-                            <Button Classes="cancel" Content="ALL OFF" Command="{Binding AllOffCommand}" />
-                        </StackPanel>
-                        <controls:DeviceDrawing Name="PaintCanvas" Height="460" IsVisible="{Binding ShowKeyCanvas}"
-                                                Device="{Binding $parent[UserControl].((vm:DeviceViewModel)DataContext)}"
-                                                PaintColors="{Binding KeyColors}" />
-                        <ItemsControl Name="LedPaintGrid" ItemsSource="{Binding Cells}" IsVisible="{Binding ShowLedGrid}" HorizontalAlignment="Left">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate><UniformGrid Columns="{Binding GridColumns}" /></ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:LedCell">
-                                    <Button Width="{Binding Width}" MinWidth="0" Height="44" Margin="2" Padding="0"
-                                            Background="{Binding Brush}" Foreground="{Binding LabelBrush}" CornerRadius="4"
-                                            FontSize="10" Content="{Binding Label}" HorizontalContentAlignment="Center"
-                                            BorderBrush="#3A3A3A" BorderThickness="1" Click="PaintCell"
-                                            AutomationProperties.Name="{Binding AccessibleName}" ToolTip.Tip="{Binding AccessibleName}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
-            </WrapPanel>
-        </ScrollViewer>
+        <views:DeviceLightingView Name="LightingPage" Grid.Row="2"
+                                  IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}" />
 
         <!-- PERFORMANCE -->
         <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
@@ -464,58 +372,8 @@
             <views:OnboardEditorView DataContext="{Binding Onboard}" />
         </Grid>
 
-        <ScrollViewer Name="DeviceHealthPanel" Grid.Row="2"
-                      IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=HEALTH}">
-            <StackPanel Margin="24,16" MaxWidth="940" Spacing="12" DataContext="{Binding Health}" x:DataType="vm:DeviceHealth">
-                <TextBlock Classes="heading" Text="DEVICE HEALTH AND COMPATIBILITY" />
-                <Border Background="{StaticResource PanelBrush}" Padding="16">
-                    <Grid ColumnDefinitions="2*,*,*,*" ColumnSpacing="16">
-                        <StackPanel Spacing="4">
-                            <TextBlock Classes="caption" Text="Detected model" />
-                            <TextBlock Name="HealthModelName" Text="{Binding Model}" TextWrapping="Wrap" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="4">
-                            <TextBlock Classes="caption" Text="Connection" />
-                            <TextBlock Name="HealthConnection" Text="{Binding Connection}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Spacing="4">
-                            <TextBlock Classes="caption" Text="Firmware control" />
-                            <TextBlock Text="{Binding ControlStatus}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="3" Spacing="4">
-                            <TextBlock Classes="caption" Text="Linux input" />
-                            <TextBlock Text="{Binding InputStatus}" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
-                <TextBlock IsVisible="{Binding Issue, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                           Text="{Binding Issue}" Foreground="#FFB4B4" TextWrapping="Wrap" />
-                <Border Background="{StaticResource PanelBrush}" Padding="16">
-                    <StackPanel>
-                        <Grid ColumnDefinitions="190,102,*,*" ColumnSpacing="12" Margin="0,0,0,6">
-                            <TextBlock Classes="caption" Text="Feature" />
-                            <TextBlock Grid.Column="1" Classes="caption" Text="Access" />
-                            <TextBlock Grid.Column="2" Classes="caption" Text="Reason" />
-                            <TextBlock Grid.Column="3" Classes="caption" Text="Verification" />
-                        </Grid>
-                        <ItemsControl Name="HealthFeatures" ItemsSource="{Binding Features}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:DeviceHealthFeature">
-                                <Grid ColumnDefinitions="190,102,*,*" ColumnSpacing="12" Margin="0,6">
-                                    <TextBlock Name="HealthFeatureName" Text="{Binding Name}" TextWrapping="Wrap" />
-                                    <TextBlock Name="HealthFeatureStatus" Grid.Column="1" Text="{Binding Status}" FontWeight="SemiBold" />
-                                    <TextBlock Name="HealthFeatureReason" Grid.Column="2" Text="{Binding Reason}"
-                                               Foreground="#CCCCCC" TextWrapping="Wrap" />
-                                    <TextBlock Name="HealthFeatureVerification" Grid.Column="3" Text="{Binding Verification}"
-                                               Foreground="#CCCCCC" TextWrapping="Wrap" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
-            </StackPanel>
-        </ScrollViewer>
+        <views:DeviceHealthView Name="HealthPage" Grid.Row="2"
+                                IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=HEALTH}" />
 
         <!-- POWER -->
         <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">

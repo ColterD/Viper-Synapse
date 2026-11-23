@@ -77,7 +77,7 @@ public sealed class AppearanceTests
     }
 
     [Fact]
-    public Task Dashboard_replaces_setup_guidance_when_a_device_appears() => HeadlessApp.Session.Dispatch(() =>
+    public Task Dashboard_replaces_setup_guidance_when_a_device_appears() => HeadlessApp.Session.Dispatch<bool>(async () =>
     {
         var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
         var dashboard = new HomeView { DataContext = main.Home };
@@ -85,6 +85,7 @@ public sealed class AppearanceTests
         window.Show();
         try
         {
+            await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([]));
             var hint = Assert.IsType<Border>(dashboard.FindControl<Border>("DeviceSetupHint"));
             Assert.True(hint.IsEffectivelyVisible);
             var info = new DeviceInfo("00e3", "00e4", "Basilisk", "mouse", "bluetooth:123456123456",
@@ -95,6 +96,7 @@ public sealed class AppearanceTests
             main.Home.Devices.Clear();
             Dispatcher.UIThread.RunJobs();
             Assert.True(hint.IsEffectivelyVisible);
+            return true;
         }
         finally
         {

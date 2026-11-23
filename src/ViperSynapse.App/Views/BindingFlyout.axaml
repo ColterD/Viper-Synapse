@@ -28,7 +28,7 @@
                                Text="The mouse may still change its DPI stage when this button is remapped or disabled in Viper." />
 
                     <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Default}"
-                               Text="The key does what it does without Viper Synapse." TextWrapping="Wrap" Foreground="#AAAAAA" />
+                               Text="The key keeps its default behavior." TextWrapping="Wrap" Foreground="#AAAAAA" />
 
                     <!-- Keyboard function: press the key to send, tick the modifiers to hold with it. -->
                     <StackPanel Spacing="10" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Keyboard}">

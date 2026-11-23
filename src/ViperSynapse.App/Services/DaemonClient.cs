@@ -45,31 +45,46 @@ public sealed class DaemonClient : IAsyncDisposable
 
     public async Task ConnectAsync(CancellationToken cancel = default)
     {
+        _connection?.Dispose();
+        _connection = null;
         var connection = new DBusConnection(DBusAddress.Session ?? throw new InvalidOperationException("No session bus."));
-        await connection.ConnectAsync().ConfigureAwait(false);
-        _connection = connection;
-        await connection.AddMatchAsync(
-            new MatchRule { Type = MessageType.Signal, Interface = Interface, Path = ObjectPath },
-            static (Message m, object? _) =>
-            {
-                var r = m.GetBodyReader();
-                return m.SignatureAsString switch
+        try
+        {
+            await connection.ConnectAsync().ConfigureAwait(false);
+            _connection = connection;
+            await connection.AddMatchAsync(
+                new MatchRule { Type = MessageType.Signal, Interface = Interface, Path = ObjectPath },
+                static (Message m, object? _) =>
                 {
-                    "s" => (m.MemberAsString ?? "", r.ReadString(), 0.0, 0.0),
-                    "sdd" => (m.MemberAsString ?? "", r.ReadString(), r.ReadDouble(), r.ReadDouble()),
-                    _ => (m.MemberAsString ?? "", (string?)null, 0.0, 0.0),
-                };
-            },
-            (Notification<(string Member, string? Arg, double X, double Y)> n) =>
-            {
-                if (!n.HasValue) return;
-                var signal = n.Value;
-                if (signal.Member == "DevicesChanged") DevicesChanged?.Invoke();
-                else if (signal.Member == "SettingsChanged" && signal.Arg != null) SettingsChanged?.Invoke(signal.Arg);
-                else if (signal.Member == "StickMoved" && signal.Arg != null) StickMoved?.Invoke(signal.Arg, signal.X, signal.Y);
-            },
-            emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
+                    var r = m.GetBodyReader();
+                    return m.SignatureAsString switch
+                    {
+                        "s" => (m.MemberAsString ?? "", r.ReadString(), 0.0, 0.0),
+                        "sdd" => (m.MemberAsString ?? "", r.ReadString(), r.ReadDouble(), r.ReadDouble()),
+                        _ => (m.MemberAsString ?? "", (string?)null, 0.0, 0.0),
+                    };
+                },
+                (Notification<(string Member, string? Arg, double X, double Y)> n) =>
+                {
+                    if (!n.HasValue) return;
+                    var signal = n.Value;
+                    if (signal.Member == "DevicesChanged") DevicesChanged?.Invoke();
+                    else if (signal.Member == "SettingsChanged" && signal.Arg != null) SettingsChanged?.Invoke(signal.Arg);
+                    else if (signal.Member == "StickMoved" && signal.Arg != null) StickMoved?.Invoke(signal.Arg, signal.X, signal.Y);
+                },
+                emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
+            await EnsureDaemonAsync(cancel).ConfigureAwait(false);
+        }
+        catch
+        {
+            _connection = null;
+            connection.Dispose();
+            throw;
+        }
+    }
 
+    async Task EnsureDaemonAsync(CancellationToken cancel)
+    {
         if (await TryPingAsync().ConfigureAwait(false))
         {
             // A service from another build (an update installed while it ran) is replaced by this build's own.
@@ -88,7 +103,7 @@ public sealed class DaemonClient : IAsyncDisposable
             if (await TryPingAsync().ConfigureAwait(false))
                 return;
         }
-        throw new TimeoutException("The Viper Synapse service did not start. Is the udev rule installed?");
+        throw new TimeoutException($"The {AppBranding.Name} service did not start. Is the udev rule installed?");
     }
 
     async Task<bool> TryPingAsync()
@@ -181,7 +196,7 @@ public sealed class DaemonClient : IAsyncDisposable
         using var writer = connection.GetMessageWriter();
         writer.WriteMethodCallHeader(destination: "org.freedesktop.Notifications", path: "/org/freedesktop/Notifications",
             @interface: "org.freedesktop.Notifications", member: "Notify", signature: "susssasa{sv}i");
-        writer.WriteString("Viper Synapse");
+        writer.WriteString(AppBranding.Name);
         writer.WriteUInt32(0);
         writer.WriteString("viper-synapse");
         writer.WriteString(summary);

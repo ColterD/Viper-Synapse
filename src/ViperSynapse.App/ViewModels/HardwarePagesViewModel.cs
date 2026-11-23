@@ -27,6 +27,16 @@ sealed class Debounce(Action action)
         _timer.Stop();
         _timer.Start();
     }
+
+    public bool IsPending => _timer.IsEnabled;
+
+    public bool StopPending()
+    {
+        if (!_timer.IsEnabled)
+            return false;
+        _timer.Stop();
+        return true;
+    }
 }
 
 /// <summary>One LED of the plain grid editor.</summary>
@@ -112,8 +122,8 @@ public sealed partial class LightingViewModel : ObservableObject
     public string? EffectHint => SelectedEffect?.Kind switch
     {
         EffectKind.Temperature => "Follows the CPU's temperature: the first colour at 40 °C, the second at 90 °C.",
-        EffectKind.Reactive or EffectKind.Ripple when Drawn => "Answers key presses while Viper Synapse is remapping the device.",
-        _ when Drawn => "Drawn by Viper Synapse while it runs; the device shows its last frame when it stops.",
+        EffectKind.Reactive or EffectKind.Ripple when Drawn => "Responds to key presses while the app is remapping the device.",
+        _ when Drawn => "The app draws this effect while it runs. The device shows the last frame after the app closes.",
         _ => null,
     };
 
@@ -395,6 +405,10 @@ public sealed partial class LightingViewModel : ObservableObject
 
     void Commit() => _save(Current());
 
+    internal bool HasPendingEdits => _debounce.IsPending;
+
+    internal LightingSettings? TakePendingSettings() => _debounce.StopPending() ? Current() : null;
+
     ZoneLighting? LegacyFrameSetting() => Zones.Select(zone => _zones.GetValueOrDefault(zone))
         .FirstOrDefault(setting => setting?.Effect.Kind == EffectKind.Custom);
 
@@ -510,9 +524,15 @@ public sealed partial class PerformanceViewModel : ObservableObject
         _loading = true;
         try
         {
-            Stages.Clear();
+            while (Stages.Count > settings.Stages.Count)
+                Stages.RemoveAt(Stages.Count - 1);
             for (int i = 0; i < settings.Stages.Count; i++)
-                Stages.Add(new StageRow(i + 1, this) { X = settings.Stages[i].X, Y = settings.Stages[i].Y, Active = i == settings.ActiveStage });
+            {
+                if (i == Stages.Count)
+                    Stages.Add(new StageRow(i + 1, this));
+                var row = Stages[i];
+                (row.X, row.Y, row.Active) = (settings.Stages[i].X, settings.Stages[i].Y, i == settings.ActiveStage);
+            }
             StageCount = settings.Stages.Count;
             ActiveStage = settings.ActiveStage;
             SeparateXY = settings.Stages.Any(s => s.X != s.Y);
@@ -611,10 +631,16 @@ public sealed partial class PerformanceViewModel : ObservableObject
         _debounce.Poke();
     }
 
-    void Commit()
+    void Commit() => _save(Current());
+
+    internal bool HasPendingEdits => _debounce.IsPending;
+
+    internal PerformanceSettings? TakePendingSettings() => _debounce.StopPending() ? Current() : null;
+
+    PerformanceSettings Current()
     {
         var stages = Stages.Select(s => new DpiStage(Round(s.X), Round(SeparateXY ? s.Y : s.X))).ToList();
-        _save(new PerformanceSettings(stages, Math.Clamp(ActiveStage, 0, Math.Max(0, stages.Count - 1)), PollingRate));
+        return new PerformanceSettings(stages, Math.Clamp(ActiveStage, 0, Math.Max(0, stages.Count - 1)), PollingRate);
     }
 
     int Round(double dpi) => Math.Clamp((int)Math.Round(dpi / DpiStep) * DpiStep, 100, DpiMax);

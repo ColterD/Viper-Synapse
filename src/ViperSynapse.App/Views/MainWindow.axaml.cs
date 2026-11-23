@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using ViperSynapse.App.Services;
 
 namespace ViperSynapse.App.Views;
@@ -21,12 +23,31 @@ public sealed partial class MainWindow : Window
         MinimizeButton.Click += (_, _) => WindowState = WindowState.Minimized;
         MaximizeButton.Click += (_, _) => ToggleMaximized();
         CloseButton.Click += (_, _) => Close();
-        HelpButton.Click += (_, _) => _ = Launcher.LaunchUriAsync(ProjectLinks.Repository);
         Edge(EdgeLeft, WindowEdge.West);
         Edge(EdgeRight, WindowEdge.East);
         Edge(EdgeBottom, WindowEdge.South);
         Edge(EdgeBottomRight, WindowEdge.SouthEast);
         Edge(EdgeBottomLeft, WindowEdge.SouthWest);
+    }
+
+    async void CopyDocumentationLink(object? sender, RoutedEventArgs e)
+    {
+        var link = ProjectLinks.Documentation.AbsoluteUri;
+        var message = link;
+        try
+        {
+            if (Clipboard is { } clipboard)
+            {
+                await clipboard.SetTextAsync(link);
+                message = "Documentation link copied.";
+            }
+        }
+        catch (Exception)
+        {
+            // The link remains selectable when the platform clipboard is unavailable.
+        }
+        HelpLinkStatus.Text = message;
+        HelpLinkStatus.IsVisible = true;
     }
 
     void Edge(Control handle, WindowEdge edge) => handle.PointerPressed += (_, e) =>

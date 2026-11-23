@@ -42,14 +42,14 @@ public sealed class App : Application
 
     void BuildTray()
     {
-        var open = new NativeMenuItem("Open Viper Synapse");
+        var open = new NativeMenuItem($"Open {AppBranding.Name}");
         open.Click += (_, _) => ShowWindow();
         var quit = new NativeMenuItem("Quit");
         quit.Click += (_, _) => Quit();
         var tray = new TrayIcon
         {
             Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://viper-synapse/Assets/icon.png"))),
-            ToolTipText = "Viper Synapse",
+            ToolTipText = AppBranding.Name,
             Menu = [open, new NativeMenuItemSeparator(), quit],
         };
         tray.Clicked += (_, _) => ShowWindow();
@@ -95,8 +95,11 @@ public sealed class App : Application
         if (_window is not null)
             _window.IsEnabled = false;
         var pendingPreferences = _main!.Settings.PendingSave;
+        var pendingDeviceSaves = _main.FinishDeviceEditsAsync(TimeSpan.FromSeconds(5));
         _ = Task.Run(async () =>
         {
+            try { await pendingDeviceSaves.ConfigureAwait(false); }
+            catch (TimeoutException) { Console.Error.WriteLine("Timed out waiting for device settings saves during shutdown."); }
             try { await _client!.QuitServiceAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
             catch (Exception e) when (e is TimeoutException or InvalidOperationException or Tmds.DBus.Protocol.DBusErrorReplyException or Tmds.DBus.Protocol.DBusConnectionException) { }
             await _client!.DisposeAsync().ConfigureAwait(false);

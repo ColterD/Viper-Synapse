@@ -204,9 +204,10 @@ public class LegacyLightingTests
             {
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
-                var effects = Assert.IsType<ListBox>(view.FindControl<ListBox>("FrameEffectTabs"));
+                var lighting = Assert.IsType<DeviceLightingView>(view.FindControl<DeviceLightingView>("LightingPage"));
+                var effects = Assert.IsType<ListBox>(lighting.FindControl<ListBox>("FrameEffectTabs"));
                 effects.SelectedItem = LightingViewModel.EffectTabs[1];
-                var grid = Assert.IsType<ItemsControl>(view.FindControl<ItemsControl>("LedPaintGrid"));
+                var grid = Assert.IsType<ItemsControl>(lighting.FindControl<ItemsControl>("LedPaintGrid"));
                 IEnumerable<Button> PaintButtons() => grid.GetVisualDescendants().OfType<Button>()
                     .Where(control => control.Content as string == label);
                 for (int attempt = 0; attempt < 50 && !PaintButtons().Any(); attempt++)
