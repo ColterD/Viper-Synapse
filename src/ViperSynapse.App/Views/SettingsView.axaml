@@ -96,7 +96,7 @@
                         <TextBlock Text="{Binding Version}" HorizontalAlignment="Center" Foreground="#CCCCCC" />
                         <TextBlock HorizontalAlignment="Center" TextAlignment="Center" Classes="caption" TextWrapping="Wrap"
                                    Text="Free software under the GPL-3.0-or-later. Not affiliated with or endorsed by Razer Inc.&#x0a;Device protocol knowledge from the OpenRazer project." />
-                        <Button Classes="link" Content="github.com/codingncaffeine/Viper-Synapse" HorizontalAlignment="Center" Click="OpenProject" />
+                        <Button Classes="link" Content="View project on GitHub" HorizontalAlignment="Center" Click="OpenProject" />
                     </StackPanel>
                 </Border>
             </WrapPanel>
