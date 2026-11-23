@@ -11,6 +11,17 @@
         WindowStartupLocation="CenterScreen"
         WindowDecorations="None">
 
+    <Window.Resources>
+        <DataTemplate x:Key="TopTabTemplate" x:DataType="vm:TabViewModel">
+            <StackPanel Orientation="Horizontal" Spacing="9">
+                <PathIcon Width="24" Height="24" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}"
+                          Data="{Binding Icon, Converter={x:Static views:Converters.TabIconGeometry}}" />
+                <TextBlock Text="{Binding Header}" VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
+                           ToolTip.Tip="{Binding Header}" />
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+
     <Window.DataTemplates>
         <DataTemplate DataType="vm:HomeViewModel"><views:HomeView /></DataTemplate>
         <DataTemplate DataType="vm:DeviceViewModel"><views:DeviceView /></DataTemplate>
@@ -20,9 +31,9 @@
     </Window.DataTemplates>
 
     <Panel>
-        <Grid RowDefinitions="40,34,*,Auto">
+        <Grid RowDefinitions="Auto,34,*,Auto">
             <!-- Dragging the tab bar moves the window. -->
-            <Border Grid.Row="0" Background="{StaticResource TopBarBrush}" Name="TopBar">
+            <Border Grid.Row="0" Background="{StaticResource TopBarBrush}" Name="TopBar" MinHeight="40">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                         <Button Classes="chrome" Name="MinimizeButton" ToolTip.Tip="Minimize">
@@ -35,22 +46,24 @@
                             <Path Data="M0,0 L10,10 M10,0 L0,10" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1" />
                         </Button>
                     </StackPanel>
-                    <ListBox Classes="topTabs" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}"
-                             Margin="6,0,0,0" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                             ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                    <ListBox DockPanel.Dock="Left" Name="PrimaryTabsList" Classes="topTabs"
+                             ItemsSource="{Binding PrimaryTabs}" SelectedItem="{Binding SelectedPrimaryTab, Mode=TwoWay}"
+                             AutomationProperties.Name="App tabs" Margin="6,0,0,0"
+                             ItemTemplate="{StaticResource TopTabTemplate}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled">
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
                         </ListBox.ItemsPanel>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:TabViewModel">
-                                <StackPanel Orientation="Horizontal" Spacing="9">
-                                    <PathIcon Width="24" Height="24" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}"
-                                              Data="{Binding Icon, Converter={x:Static views:Converters.TabIconGeometry}}" />
-                                    <TextBlock Text="{Binding Header}" VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
-                                               ToolTip.Tip="{Binding Header}" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <ListBox Name="DeviceTabsList" Classes="topTabs"
+                             ItemsSource="{Binding Home.Devices}" SelectedItem="{Binding SelectedDeviceTab, Mode=TwoWay}"
+                             AutomationProperties.Name="Connected device tabs" Margin="12,0,0,0"
+                             IsVisible="{Binding Home.Devices.Count, Converter={x:Static views:Converters.HasItems}}"
+                             ItemTemplate="{StaticResource TopTabTemplate}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
                     </ListBox>
                 </DockPanel>
             </Border>

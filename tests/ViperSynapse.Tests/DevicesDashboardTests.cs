@@ -17,6 +17,43 @@ public sealed class DevicesDashboardTests
     static DeviceInfo Keyboard => new("0221", "0221", "Razer BlackWidow Chroma V2", "keyboard", "usb-keyboard",
         true, false, "KEYBOARD", "v1.00", "/dev/emulated", [], false, null, Connection: "wired");
 
+    [Fact]
+    public Task A_card_reports_mixed_unit_health_and_opens_the_affected_unit() =>
+        HeadlessApp.Session.Dispatch<bool>(async () =>
+        {
+            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+            var home = new HomeView { DataContext = main.Home };
+            var window = new Window { Width = 1080, Height = 680, Content = home };
+            var healthy = Mouse("wired-healthy") with { InputNodes = ["/dev/events"], ControlReady = true };
+            var limited = Mouse("wired-limited") with
+            {
+                InputNodes = ["/dev/events"],
+                ControlReady = false,
+                ControlIssue = "Emulated control permission problem",
+            };
+            window.Show();
+            try
+            {
+                await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([healthy, limited]));
+                window.UpdateLayout();
+                var device = Assert.Single(main.Home.Devices);
+                Assert.Equal("1 of 2 units needs attention", device.DashboardAttentionSummary);
+                Assert.Equal(limited.Serial, Assert.Single(device.DashboardAttention).Unit.Serial);
+                Assert.Contains(home.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == limited.ControlIssue);
+                var health = home.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Health"));
+                health.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Same(device, main.SelectedTab);
+                Assert.Equal(DeviceViewModel.HealthPage, device.SelectedPage);
+                Assert.Equal(limited.Serial, device.InspectedUnit?.Serial);
+                return true;
+            }
+            finally
+            {
+                await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([]));
+                window.Close();
+            }
+        }, CancellationToken.None);
+
     [Theory]
     [InlineData(0, false, 0)]
     [InlineData(1, false, 1)]

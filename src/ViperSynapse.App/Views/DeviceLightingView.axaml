@@ -3,6 +3,7 @@
              xmlns:vm="using:ViperSynapse.App.ViewModels"
              xmlns:views="using:ViperSynapse.App.Views"
              xmlns:controls="using:ViperSynapse.App.Controls"
+             xmlns:devices="using:ViperSynapse.Core.Devices"
              x:Class="ViperSynapse.App.Views.DeviceLightingView"
              x:DataType="vm:DeviceViewModel">
     <ScrollViewer>
@@ -76,9 +77,26 @@
                     <TextBlock Classes="deviceSectionTitle" Text="Per-key colours" IsVisible="{Binding !IsMouseLighting}" />
                     <TextBlock Classes="deviceSectionTitle" Text="Per-LED colours" IsVisible="{Binding IsMouseLighting}" />
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <ColorPicker Color="{Binding PaintColor}" />
+                        <ColorPicker Color="{Binding PaintColor}" AutomationProperties.Name="Paint colour" />
                         <Button Classes="cancel" Content="Fill all" Command="{Binding FillAllCommand}" />
                         <Button Classes="cancel" Content="All off" Command="{Binding AllOffCommand}" />
+                    </StackPanel>
+                    <StackPanel Spacing="6" IsVisible="{Binding ShowKeyCanvas}">
+                        <TextBlock Classes="deviceLabel" Text="Paint individual keys" />
+                        <ItemsControl Name="PaintKeyList" ItemsSource="{Binding PaintableKeys}"
+                                      AutomationProperties.Name="Keys available to paint">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="devices:DeviceKey">
+                                    <Button Click="PaintKey" Margin="0,0,8,8"
+                                            AutomationProperties.Name="{Binding Label, StringFormat='Paint {0}'}">
+                                        <TextBlock><Run Text="{Binding Number}" /><Run Text=" · " /><Run Text="{Binding Label}" /></TextBlock>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
                     <controls:DeviceDrawing Name="PaintCanvas" Height="460" IsVisible="{Binding ShowKeyCanvas}"
                                             Device="{Binding $parent[views:DeviceLightingView].((vm:DeviceViewModel)DataContext)}"

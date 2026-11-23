@@ -201,10 +201,79 @@ public sealed partial class MacrosViewModel(DaemonClient client, MainViewModel m
 
     // ---- The library -----------------------------------------------------------------------------------
 
+    OrderedSave<(MacroLibrary Library, MacroLibrary Baseline)>? _persistence;
+    long _loadRequest;
+    OrderedSave<(MacroLibrary Library, MacroLibrary Baseline)> Persistence => _persistence ??= new(
+        save => WriteLibraryAsync?.Invoke(save.Library) ?? client.SetMacrosAsync(save.Library, save.Baseline), SaveStateChanged);
+
+    internal Func<Task<MacroLibrary>> ReadLibraryAsync { get; init; } = client.GetMacrosAsync;
+    internal Func<MacroLibrary, Task>? WriteLibraryAsync { get; init; }
+    internal Task PendingSave => Persistence.Pending;
+    public bool HasFailedSave => Persistence.Failure != null;
+
+    public string? SaveStatus => Persistence.Reloading ? "Reloading saved macros…" :
+        Persistence.ReloadFailure is { } reload ? $"Could not reload saved macros. Your edits are still here. {reload.Message}" :
+        Persistence.Failure is SettingsConflictException ? "Saved macros changed while you were editing. Your local edits are still here." :
+        Persistence.Failure is { } error ? $"Could not save macros. {error.Message}" :
+        Persistence.Saving ? "Saving macros…" : Persistence.HasSaved ? "Macros saved." : null;
+
+    public bool CanDiscardFailedSave => HasFailedSave && !Persistence.Reloading && !Persistence.DiscardRequested;
+    public bool CanRetryFailedSave => CanDiscardFailedSave && Persistence.Failure is not SettingsConflictException;
+    public bool IsDiscardConfirmationVisible => Persistence.DiscardRequested;
+
+    [RelayCommand(CanExecute = nameof(CanRetryFailedSave))]
+    void RetrySave()
+    {
+        if (Dirty)
+            Save();
+        else
+            Persistence.Retry();
+    }
+
+    [RelayCommand]
+    void RequestDiscardSave() => Persistence.RequestDiscard(true);
+
+    [RelayCommand]
+    void CancelDiscardSave() => Persistence.RequestDiscard(false);
+
+    [RelayCommand]
+    Task ConfirmDiscardSave()
+    {
+        var work = _work;
+        var type = _type;
+        var selected = SelectedMacro?.Id;
+        return Persistence.DiscardAsync(ReadLibraryAsync, library => SetLibrary(library, selected),
+            () => ReferenceEquals(_work, work) && _type == type && SelectedMacro?.Id == selected);
+    }
+
+    void SaveStateChanged()
+    {
+        OnPropertyChanged(nameof(SaveStatus));
+        OnPropertyChanged(nameof(HasFailedSave));
+        OnPropertyChanged(nameof(CanRetryFailedSave));
+        OnPropertyChanged(nameof(CanDiscardFailedSave));
+        OnPropertyChanged(nameof(IsDiscardConfirmationVisible));
+        RetrySaveCommand.NotifyCanExecuteChanged();
+    }
+
     public async Task LoadAsync()
     {
-        var library = await client.GetMacrosAsync().ConfigureAwait(false);
-        await Dispatcher.UIThread.InvokeAsync(() => SetLibrary(library, SelectedMacro?.Id));
+        var capture = await Dispatcher.UIThread.InvokeAsync(() => (Request: ++_loadRequest, Persistence.Revision, Persistence.Pending));
+        bool Current() => capture.Request == _loadRequest && capture.Revision == Persistence.Revision &&
+            !Persistence.HasUncommittedChanges && !Dirty;
+        await capture.Pending.ConfigureAwait(false);
+        if (!await Dispatcher.UIThread.InvokeAsync(Current))
+            return;
+        try
+        {
+            var library = await ReadLibraryAsync().ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (Current())
+                    SetLibrary(library, SelectedMacro?.Id);
+            });
+        }
+        catch (Exception e) { main.Fail("Could not load macros", e, Current); }
     }
 
     bool _switching;
@@ -289,12 +358,9 @@ public sealed partial class MacrosViewModel(DaemonClient client, MainViewModel m
 
     void Commit(MacroLibrary library, Guid? select)
     {
+        var baseline = Library;
         SetLibrary(library, select);
-        _ = Task.Run(async () =>
-        {
-            try { await client.SetMacrosAsync(library).ConfigureAwait(false); }
-            catch (Exception e) { main.Fail("Could not save the macros", e); }
-        });
+        Persistence.Enqueue((library, baseline));
     }
 
     // ---- Steps: the ADD panel and the list --------------------------------------------------------------

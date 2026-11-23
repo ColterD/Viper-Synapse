@@ -73,25 +73,48 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DeviceViewModel">
-                                <Button Classes="deviceCard" Click="OpenDevice"
-                                        AutomationProperties.Name="{Binding ShortName}">
-                                    <Grid ColumnDefinitions="64,*,Auto" ColumnSpacing="14">
-                                        <Panel Height="52">
-                                            <Image Source="{Binding Photo}" Stretch="Uniform"
-                                                   IsVisible="{Binding Photo, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                                            <Image Source="/Assets/icon.png" Width="36" Height="36"
-                                                   IsVisible="{Binding Photo, Converter={x:Static ObjectConverters.IsNull}}" />
-                                        </Panel>
-                                        <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding ShortName}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                            <TextBlock Text="{Binding DashboardConnection}" Classes="caption" TextWrapping="Wrap" />
-                                            <TextBlock Text="{Binding ProfileName}" Classes="caption"
-                                                       IsVisible="{Binding ProfileName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                <StackPanel Spacing="6">
+                                    <Button Classes="deviceCard" Click="OpenDevice"
+                                            AutomationProperties.Name="{Binding ShortName}">
+                                        <Grid ColumnDefinitions="64,*,Auto" ColumnSpacing="14">
+                                            <Panel Height="52">
+                                                <Image Source="{Binding Photo}" Stretch="Uniform"
+                                                       IsVisible="{Binding Photo, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                                <Image Source="/Assets/icon.png" Width="36" Height="36"
+                                                       IsVisible="{Binding Photo, Converter={x:Static ObjectConverters.IsNull}}" />
+                                            </Panel>
+                                            <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding ShortName}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding DashboardConnection}" Classes="caption" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding ProfileName, StringFormat='Software profile · {0}'}" Classes="caption" TextWrapping="Wrap"
+                                                           IsVisible="{Binding ProfileName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            </StackPanel>
+                                            <Path Grid.Column="2" Data="M0,0 L5,5 L0,10" Stroke="{StaticResource TextDimBrush}"
+                                                  StrokeThickness="1.5" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Button>
+                                    <Border Classes="devicePanel statusNotice" Padding="12,10"
+                                            IsVisible="{Binding DashboardAttention.Count, Converter={x:Static views:Converters.HasItems}}">
+                                        <StackPanel Spacing="7">
+                                            <TextBlock Text="{Binding DashboardAttentionSummary}" Classes="deviceStatusText statusWarning" />
+                                            <ItemsControl ItemsSource="{Binding DashboardAttention}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:DashboardUnitAttention">
+                                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,3">
+                                                            <StackPanel Spacing="2">
+                                                                <TextBlock Text="{Binding Unit.Label}" Classes="caption" TextWrapping="Wrap" />
+                                                                <TextBlock Text="{Binding Reason}" Classes="deviceDetail" TextWrapping="Wrap" />
+                                                            </StackPanel>
+                                                            <Button Grid.Column="1" Classes="link" Content="Health" Click="OpenHealth"
+                                                                    AutomationProperties.Name="{Binding HealthLabel}"
+                                                                    Tag="{Binding $parent[ItemsControl].((vm:DeviceViewModel)DataContext)}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                         </StackPanel>
-                                        <Path Grid.Column="2" Data="M0,0 L5,5 L0,10" Stroke="{StaticResource TextDimBrush}"
-                                              StrokeThickness="1.5" VerticalAlignment="Center" />
-                                    </Grid>
-                                </Button>
+                                    </Border>
+                                </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -113,6 +136,20 @@
                             </Grid>
                             <TextBlock Foreground="#DDDDDD" FontSize="12" TextWrapping="Wrap"
                                        Text="Global shortcuts work across profiles for devices whose input the app manages." />
+                            <StackPanel Spacing="6" IsVisible="{Binding SaveStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding SaveStatus}" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                                <WrapPanel ItemSpacing="8" LineSpacing="4" IsVisible="{Binding CanDiscardFailedSave}">
+                                    <Button Content="Retry save" Command="{Binding RetrySaveCommand}" IsVisible="{Binding CanRetryFailedSave}" />
+                                    <Button Content="Discard and reload…" Command="{Binding RequestDiscardSaveCommand}" />
+                                </WrapPanel>
+                                <StackPanel Spacing="4" IsVisible="{Binding IsDiscardConfirmationVisible}">
+                                    <TextBlock Text="Discard your unsaved shortcut edits and load the saved shortcuts?" TextWrapping="Wrap" />
+                                    <WrapPanel ItemSpacing="8" LineSpacing="4">
+                                        <Button Content="Keep edits" Command="{Binding CancelDiscardSaveCommand}" />
+                                        <Button Content="Discard and reload" Command="{Binding ConfirmDiscardSaveCommand}" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </StackPanel>
                             <ItemsControl ItemsSource="{Binding Rows}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:ShortcutRow">

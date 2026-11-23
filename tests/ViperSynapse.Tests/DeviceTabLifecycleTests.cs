@@ -166,7 +166,7 @@ public sealed class DeviceTabLifecycleTests
                 WriteDeviceSettingsAsync = (_, _) => stalledWrite.Task,
             };
 
-            main.SaveDeviceSettings(Mouse().Key, DeviceSettings.Create());
+            _ = main.SaveDeviceSettings(Mouse().Key, DeviceSettings.Create());
             try
             {
                 await Assert.ThrowsAsync<TimeoutException>(() => main.FinishDeviceEditsAsync(TimeSpan.Zero));

@@ -59,6 +59,10 @@ public sealed record KeyGroup(string Title, IReadOnlyList<KeyRowViewModel> Keys)
 public sealed record ProfileChoice(Guid Id, string Name);
 
 public sealed record DeviceUnitChoice(string Port, string ProductId, string? Serial, string Label);
+public sealed record DashboardUnitAttention(DeviceUnitChoice Unit, string Reason)
+{
+    public string HealthLabel => $"Health · {Unit.Label}";
+}
 
 /// <summary>A line of the key list: a group heading, or one key or two side by side (Synapse 4 runs a long group
 /// down two columns).</summary>
@@ -177,10 +181,22 @@ public sealed partial class DeviceViewModel : TabViewModel
     long _deviceReadRequest;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UnitScope), nameof(DashboardConnection))]
+    [NotifyPropertyChangedFor(nameof(UnitScope), nameof(DashboardConnection), nameof(DashboardAttentionSummary))]
     public partial IReadOnlyList<DeviceUnitChoice> UnitChoices { get; private set; } = [];
 
     [ObservableProperty] public partial DeviceUnitChoice? InspectedUnit { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DashboardAttentionSummary))]
+    public partial IReadOnlyList<DashboardUnitAttention> DashboardAttention { get; private set; } = [];
+
+    public string DashboardAttentionSummary => DashboardAttention.Count switch
+    {
+        0 => "",
+        1 when UnitChoices.Count == 1 => "Needs attention",
+        1 => $"1 of {UnitChoices.Count} units needs attention",
+        _ => $"{DashboardAttention.Count} of {UnitChoices.Count} units need attention",
+    };
 
     public string UnitScope => UnitChoices.Count > 1
         ? $"Profile edits are shared by all {UnitChoices.Count} connected units."
@@ -210,6 +226,12 @@ public sealed partial class DeviceViewModel : TabViewModel
             if (!UnitChoices.SequenceEqual(choices))
                 UnitChoices = choices;
             InspectedUnit = UnitChoices.First(choice => choice.Port == next.Port && choice.ProductId == next.ProductId);
+            var attention = new List<DashboardUnitAttention>();
+            for (int i = 0; i < units.Count; i++)
+                if (DeviceHealth.AttentionReason(units[i], Model) is { } reason)
+                    attention.Add(new DashboardUnitAttention(UnitChoices[i], reason));
+            if (!DashboardAttention.SequenceEqual(attention))
+                DashboardAttention = attention;
         }
         finally
         {
@@ -580,6 +602,18 @@ public sealed partial class DeviceViewModel : TabViewModel
     [ObservableProperty]
     public partial BindingEditorViewModel? Editor { get; set; }
 
+    sealed record BindingDraft(Guid ProfileId, int KeymapIndex, string KeymapName, bool Hypershift, ushort Source, Binding StartingBinding)
+    {
+        public Binding? SubmittedBinding { get; set; }
+        public long Revision { get; set; }
+    }
+
+    BindingDraft? _bindingDraft;
+    Action? _confirmProfileChange;
+
+    [ObservableProperty]
+    public partial string? ConfirmationMessage { get; set; }
+
     // ---- Battery: the charge readout in the header, on the Power page and on the dashboard card ------------------
 
     static readonly Avalonia.Media.IBrush BatteryGreen = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#44D62C"));
@@ -676,6 +710,7 @@ public sealed partial class DeviceViewModel : TabViewModel
 
     partial void OnInfoChanged(DeviceInfo oldValue, DeviceInfo newValue)
     {
+        NotifySaveFeedback();
         OnPropertyChanged(nameof(Status));
         OnPropertyChanged(nameof(Details));
         OnPropertyChanged(nameof(DashboardConnection));
@@ -816,7 +851,7 @@ public sealed partial class DeviceViewModel : TabViewModel
             return false;
 
         bool Current() => !_detached && _settingsReadRequest == pending.Request &&
-            _main.DeviceSaveState(Key).Revision == pending.Revision;
+            _main.DeviceSaveState(Key).Revision == pending.Revision && _main.GetSaveFeedback(Key)?.Error == null;
         try
         {
             await pending.Saved.ConfigureAwait(false);
@@ -831,7 +866,7 @@ public sealed partial class DeviceViewModel : TabViewModel
                 var withEdits = settings.ActiveProfile == _settings.ActiveProfile ? settings : MergePendingEdits(settings);
                 Load(withEdits, fromService: true);
                 if (!ReferenceEquals(withEdits, settings))
-                    _main.SaveDeviceSettings(Key, withEdits);
+                    _main.SaveDeviceSettings(Key, withEdits, settings);
             });
             return true;
         }
@@ -867,6 +902,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         try
         {
             _settings = settings;
+            UpdateDraftConflict();
             var profiles = settings.Profiles.Select(profile => new ProfileChoice(profile.Id, profile.Name)).ToArray();
             if (!Profiles.SequenceEqual(profiles))
                 Profiles = profiles;
@@ -990,8 +1026,6 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         OnPropertyChanged(nameof(Standard));
         RefreshRows();
-        if (SelectedKey != null)
-            OpenEditor(SelectedKey);
     }
 
     partial void OnSelectedKeyChanged(KeyRowViewModel? oldValue, KeyRowViewModel? newValue)
@@ -1007,7 +1041,9 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         if (value == null || !value.Bindable)
         {
+            _bindingDraft = null;
             Editor = null;
+            OnPropertyChanged(nameof(CanRetrySave));
             return;
         }
         OpenEditor(value);
@@ -1015,9 +1051,18 @@ public sealed partial class DeviceViewModel : TabViewModel
 
     void OpenEditor(KeyRowViewModel row)
     {
-        var layer = Hypershift ? CurrentKeymap.Hypershift : CurrentKeymap.Standard;
-        var binding = layer.TryGetValue(row.Key.Source, out var b) ? b : DefaultBinding.Instance;
-        Editor = new BindingEditorViewModel(row, binding, _main.MacroLibrary, _settings.Profiles, Keymaps.Count, Save, () => SelectedKey = null);
+        var profile = _settings.Active;
+        var keymap = CurrentKeymap;
+        var binding = LayerBinding(keymap, Hypershift, row.Key.Source);
+        var draft = new BindingDraft(profile.Id, ActiveKeymapIndex, keymap.Name, Hypershift, row.Key.Source, binding);
+        _bindingDraft = draft;
+        Editor = new BindingEditorViewModel(row, binding, _main.MacroLibrary, _settings.Profiles, Keymaps.Count,
+            (_, value) => Save(draft, value), () =>
+            {
+                if (ReferenceEquals(_bindingDraft, draft))
+                    SelectedKey = null;
+            }, target: $"{profile.Name} · {draft.KeymapName} · {(draft.Hypershift ? "Hypershift" : "Standard")}");
+        UpdateDraftConflict();
     }
 
     partial void OnSelectedProfileChanged(ProfileChoice? value)
@@ -1036,15 +1081,71 @@ public sealed partial class DeviceViewModel : TabViewModel
         Push(_settings with { ActiveKeymap = value });
     }
 
-    void Save(KeyRowViewModel row, Binding binding)
+    void UpdateDraftConflict()
     {
-        var keymap = CurrentKeymap;
-        var layer = new Dictionary<ushort, Binding>(Hypershift ? keymap.Hypershift : keymap.Standard);
-        if (binding is DefaultBinding) layer.Remove(row.Key.Source);
-        else layer[row.Key.Source] = binding;
-        keymap = Hypershift ? keymap with { Hypershift = layer } : keymap with { Standard = layer };
-        Push(ReplaceKeymap(keymap));
-        SelectedKey = null;
+        if (_bindingDraft is not { } draft || Editor is not { Conflict: null, IsSaving: false } editor)
+            return;
+        var profile = _settings.Profiles.FirstOrDefault(p => p.Id == draft.ProfileId);
+        if (profile == null || draft.KeymapIndex >= profile.Keymaps.Count)
+            editor.Conflict = "The original profile or keymap was removed. Close this draft to choose another target.";
+        else
+        {
+            var current = profile.Keymaps[draft.KeymapIndex];
+            var binding = LayerBinding(current, draft.Hypershift, draft.Source);
+            if (draft.KeymapName != current.Name || binding != draft.StartingBinding && binding != draft.SubmittedBinding)
+                editor.Conflict = "The original binding or keymap changed while this draft was open. Close and reopen the editor to review it.";
+        }
+    }
+
+    static Binding LayerBinding(Keymap keymap, bool hypershift, ushort source) =>
+        (hypershift ? keymap.Hypershift : keymap.Standard).GetValueOrDefault(source, DefaultBinding.Instance);
+
+    static bool SameKeymap(Keymap first, Keymap second) => first.Name == second.Name &&
+        SameBindings(first.Standard, second.Standard) && SameBindings(first.Hypershift, second.Hypershift);
+
+    static bool SameBindings(IReadOnlyDictionary<ushort, Binding> first, IReadOnlyDictionary<ushort, Binding> second) =>
+        first.Count == second.Count && first.All(item => second.TryGetValue(item.Key, out var binding) && binding == item.Value);
+
+    void Save(BindingDraft draft, Binding binding)
+    {
+        if (!ReferenceEquals(_bindingDraft, draft))
+            return;
+        UpdateDraftConflict();
+        if (Editor is not { Conflict: null, IsSaving: false } editor)
+            return;
+
+        var profile = _settings.Profiles.First(p => p.Id == draft.ProfileId);
+        var keymap = profile.Keymaps[draft.KeymapIndex];
+        var layer = new Dictionary<ushort, Binding>(draft.Hypershift ? keymap.Hypershift : keymap.Standard);
+        if (binding is DefaultBinding) layer.Remove(draft.Source);
+        else layer[draft.Source] = binding;
+        keymap = draft.Hypershift ? keymap with { Hypershift = layer } : keymap with { Standard = layer };
+        draft.SubmittedBinding = binding;
+        editor.IsSaving = true;
+        editor.SaveError = null;
+        var completion = Push(ReplaceKeymap(profile, draft.KeymapIndex, keymap));
+        draft.Revision = _main.DeviceSaveState(Key).Revision;
+        OnPropertyChanged(nameof(CanRetrySave));
+        _ = CompleteDraftSaveAsync(editor, completion);
+    }
+
+    bool OwnsBindingSave(long revision) => _bindingDraft?.Revision == revision && Editor != null;
+
+    async Task CompleteDraftSaveAsync(BindingEditorViewModel editor, Task<Exception?> completion)
+    {
+        var error = await completion.ConfigureAwait(false);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (!ReferenceEquals(Editor, editor))
+                return;
+            editor.IsSaving = false;
+            if (error == null)
+                SelectedKey = null;
+            else if (error is SettingsConflictException)
+                editor.Conflict = error.Message;
+            else
+                editor.SaveError = $"Could not save the binding. {error.Message} Edit the draft or select Save to retry.";
+        });
     }
 
     /// <summary>Binds a key in the Standard layer of the keymap in use (the MACRO tab's KEY BINDS assigns this way).</summary>
@@ -1090,12 +1191,15 @@ public sealed partial class DeviceViewModel : TabViewModel
     void UndoQuickRemap() => Bind(QuickKeys.Where(q => CurrentKeymap.Standard.GetValueOrDefault(q.Key.Source) is GamepadBinding)
                                            .Select(q => (q.Key, (Binding)DefaultBinding.Instance)));
 
-    DeviceSettings ReplaceKeymap(Keymap keymap)
+    int ActiveKeymapIndex => Math.Clamp(_settings.ActiveKeymap, 0, Math.Max(0, _settings.Active.Keymaps.Count - 1));
+
+    DeviceSettings ReplaceKeymap(Keymap keymap) => ReplaceKeymap(_settings.Active, ActiveKeymapIndex, keymap);
+
+    DeviceSettings ReplaceKeymap(Profile profile, int index, Keymap keymap)
     {
-        var profile = _settings.Active;
         var keymaps = profile.Keymaps.ToList();
         if (keymaps.Count == 0) keymaps.Add(keymap);
-        else keymaps[Math.Clamp(_settings.ActiveKeymap, 0, keymaps.Count - 1)] = keymap;
+        else keymaps[index] = keymap;
         profile = profile with { Keymaps = keymaps };
         return _settings with { Profiles = _settings.Profiles.Select(p => p.Id == profile.Id ? profile : p).ToList() };
     }
@@ -1112,8 +1216,18 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         if (_settings.Profiles.Count <= 1)
             return;
-        var rest = _settings.Profiles.Where(p => p.Id != _settings.ActiveProfile).ToList();
-        Push(_settings with { Profiles = rest, ActiveProfile = rest[0].Id, ActiveKeymap = 0 });
+        var target = _settings.Active;
+        ConfirmationMessage = $"Delete the profile {target.Name}?";
+        _confirmProfileChange = () =>
+        {
+            var rest = _settings.Profiles.Where(p => p.Id != target.Id).ToList();
+            if (rest.Count == 0 || rest.Count == _settings.Profiles.Count)
+                return;
+            var next = _settings with { Profiles = rest };
+            if (_settings.ActiveProfile == target.Id)
+                next = next with { ActiveProfile = rest[0].Id, ActiveKeymap = 0 };
+            Push(next);
+        };
     }
 
     [RelayCommand]
@@ -1133,16 +1247,46 @@ public sealed partial class DeviceViewModel : TabViewModel
     [RelayCommand]
     void ResetKeymap()
     {
-        var name = CurrentKeymap.Name;
-        Push(ReplaceKeymap(Keymap.Empty(name)));
+        var target = _settings.Active;
+        int index = ActiveKeymapIndex;
+        var original = CurrentKeymap;
+        ConfirmationMessage = $"Reset {original.Name} in {target.Name} to its defaults?";
+        _confirmProfileChange = () =>
+        {
+            var profile = _settings.Profiles.FirstOrDefault(p => p.Id == target.Id);
+            if (profile == null || index >= profile.Keymaps.Count || !SameKeymap(original, profile.Keymaps[index]))
+            {
+                _main.Fail("Could not reset the keymap", new InvalidOperationException("Its contents or profile changed. Select the keymap and try again."));
+                return;
+            }
+            if (_bindingDraft is { } draft && draft.ProfileId == profile.Id && draft.KeymapIndex == index && Editor != null)
+                Editor.Conflict = "The original keymap was reset. Close and reopen the editor to use its current bindings.";
+            Push(ReplaceKeymap(profile, index, Keymap.Empty(original.Name)));
+        };
+    }
+
+    [RelayCommand]
+    void ConfirmProfileChange()
+    {
+        var confirm = _confirmProfileChange;
+        CancelProfileChange();
+        confirm?.Invoke();
+    }
+
+    [RelayCommand]
+    void CancelProfileChange()
+    {
+        ConfirmationMessage = null;
+        _confirmProfileChange = null;
     }
 
     /// <summary>Shows the change at once and sends it to the service, which saves and applies it.</summary>
-    void Push(DeviceSettings settings)
+    Task<Exception?> Push(DeviceSettings settings)
     {
+        var baseline = _settings;
         if (settings.ActiveProfile != _settings.ActiveProfile)
             settings = MergePendingEdits(settings);
         Load(settings);
-        _main.SaveDeviceSettings(Key, settings);
+        return _main.SaveDeviceSettings(Key, settings, baseline);
     }
 }

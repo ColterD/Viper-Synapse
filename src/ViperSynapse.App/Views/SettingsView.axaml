@@ -33,7 +33,7 @@
             </Style>
         </ContainerQuery>
     </UserControl.Styles>
-    <Grid RowDefinitions="44,*" Container.Name="settings" Container.Sizing="Width">
+    <Grid RowDefinitions="44,*,Auto" Container.Name="settings" Container.Sizing="Width">
         <ListBox Classes="pills" HorizontalAlignment="Center" VerticalAlignment="Center"
                  ItemsSource="{x:Static vm:SettingsViewModel.Pages}" SelectedItem="{Binding SelectedPage}">
             <ListBox.ItemsPanel>
@@ -150,5 +150,11 @@
                 </StackPanel>
             </Grid>
         </ScrollViewer>
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="24,0,24,12"
+              IsVisible="{Binding SaveStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock Text="{Binding SaveStatus}" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+            <Button Grid.Column="1" Content="Retry save" Command="{Binding RetrySaveCommand}"
+                    IsVisible="{Binding HasFailedSave}" />
+        </Grid>
     </Grid>
 </UserControl>

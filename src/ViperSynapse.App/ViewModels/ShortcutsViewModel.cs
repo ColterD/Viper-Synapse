@@ -3,6 +3,7 @@ using System.ComponentModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ViperSynapse.App.Services;
 using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Devices;
 
@@ -21,21 +22,94 @@ public sealed partial class ShortcutsViewModel(MainViewModel main) : ObservableO
     public const int MaxKeys = 3;
 
     ShortcutList _list = ShortcutList.Empty;
+    OrderedSave<(ShortcutList List, ShortcutList Baseline)>? _persistence;
+    long _loadRequest;
+
+    OrderedSave<(ShortcutList List, ShortcutList Baseline)> Persistence => _persistence ??= new(
+        save => WriteShortcutsAsync?.Invoke(save.List) ?? main.Client.SetShortcutsAsync(save.List, save.Baseline), SaveStateChanged);
+    internal Func<Task<ShortcutList>> ReadShortcutsAsync { get; init; } = main.Client.GetShortcutsAsync;
+    internal Func<ShortcutList, Task>? WriteShortcutsAsync { get; init; }
+    internal Task PendingSave => Persistence.Pending;
+    public bool HasFailedSave => Persistence.Failure != null;
 
     public ObservableCollection<ShortcutRow> Rows { get; } = [];
 
     public bool IsEmpty => Rows.Count == 0;
 
-    public async Task LoadAsync()
+    public string? SaveStatus => Persistence.Reloading ? "Reloading saved shortcuts…" :
+        Persistence.ReloadFailure is { } reload ? $"Could not reload saved shortcuts. Your edits are still here. {reload.Message}" :
+        Persistence.Failure is SettingsConflictException ? "Saved shortcuts changed while you were editing. Your local edits are still here." :
+        Persistence.Failure is { } error ? $"Could not save global shortcuts. {error.Message}" :
+        Persistence.Saving ? "Saving global shortcuts…" : Persistence.HasSaved ? "Global shortcuts saved." : null;
+
+    public bool CanDiscardFailedSave => HasFailedSave && !Persistence.Reloading && !Persistence.DiscardRequested;
+    public bool CanRetryFailedSave => CanDiscardFailedSave && Persistence.Failure is not SettingsConflictException;
+    public bool IsDiscardConfirmationVisible => Persistence.DiscardRequested;
+
+    [RelayCommand(CanExecute = nameof(CanRetryFailedSave))]
+    void RetrySave() => Persistence.Retry();
+
+    [RelayCommand]
+    void RequestDiscardSave() => Persistence.RequestDiscard(true);
+
+    [RelayCommand]
+    void CancelDiscardSave() => Persistence.RequestDiscard(false);
+
+    [RelayCommand]
+    async Task ConfirmDiscardSave()
     {
+        var editor = Editor;
+        var keys = (Key1, Key2, Key3);
+        var device = EditDevice;
+        bool draftChanged = false;
+        void DraftChanged(object? sender, PropertyChangedEventArgs e) => draftChanged = true;
+        if (editor != null)
+            editor.PropertyChanged += DraftChanged;
         try
         {
-            var list = await main.Client.GetShortcutsAsync().ConfigureAwait(false);
-            await Dispatcher.UIThread.InvokeAsync(() => Show(list));
+            await Persistence.DiscardAsync(ReadShortcutsAsync, list =>
+            {
+                Close();
+                Show(list);
+            }, () => !draftChanged && ReferenceEquals(Editor, editor) && keys == (Key1, Key2, Key3) && EditDevice == device);
+        }
+        finally
+        {
+            if (editor != null)
+                editor.PropertyChanged -= DraftChanged;
+        }
+    }
+
+    void SaveStateChanged()
+    {
+        OnPropertyChanged(nameof(SaveStatus));
+        OnPropertyChanged(nameof(HasFailedSave));
+        OnPropertyChanged(nameof(CanRetryFailedSave));
+        OnPropertyChanged(nameof(CanDiscardFailedSave));
+        OnPropertyChanged(nameof(IsDiscardConfirmationVisible));
+        RetrySaveCommand.NotifyCanExecuteChanged();
+    }
+
+    public async Task LoadAsync()
+    {
+        var capture = await Dispatcher.UIThread.InvokeAsync(() => (Request: ++_loadRequest, Persistence.Revision, Persistence.Pending));
+        bool Current() => capture.Request == _loadRequest && capture.Revision == Persistence.Revision &&
+            !Persistence.HasUncommittedChanges && !Editing;
+        await capture.Pending.ConfigureAwait(false);
+        if (!await Dispatcher.UIThread.InvokeAsync(Current))
+            return;
+        try
+        {
+            var list = await ReadShortcutsAsync().ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (Current())
+                    Show(list);
+            });
         }
         catch (Exception e)
         {
-            main.Fail("Could not read the global shortcuts", e);
+            main.Fail("Could not read the global shortcuts", e, Current);
         }
     }
 
@@ -53,12 +127,9 @@ public sealed partial class ShortcutsViewModel(MainViewModel main) : ObservableO
 
     void Commit(ShortcutList list)
     {
+        var baseline = _list;
         Show(list);
-        _ = Task.Run(async () =>
-        {
-            try { await main.Client.SetShortcutsAsync(list).ConfigureAwait(false); }
-            catch (Exception e) { main.Fail("Could not save the global shortcuts", e); }
-        });
+        Persistence.Enqueue((list, baseline));
     }
 
     // ---- Adding or changing one -------------------------------------------------------------------------

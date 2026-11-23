@@ -66,6 +66,7 @@ public sealed partial class LightingViewModel : ObservableObject
         _save = save;
         _debounce = new Debounce(Commit);
         Zones = model?.Zones.Keys.Order().ToList() is { Count: > 0 } zones ? zones : ["main"];
+        PaintableKeys = model?.Keys.Where(key => key.Leds.Count > 0).ToArray() ?? [];
         SyncAll = Zones.Count > 1;
         SelectedZone = Zones[0];
     }
@@ -135,7 +136,8 @@ public sealed partial class LightingViewModel : ObservableObject
     public bool HasFrame => _model is { MatrixRows: > 0, MatrixColumns: > 0 } && _model.Has("custom_frame");
 
     /// <summary>Keys know their LEDs (the Tartarus): paint on the drawn device. Otherwise paint a plain LED grid.</summary>
-    public bool PaintsKeys => _model?.Keys.Any(k => k.Leds.Count > 0) == true;
+    public IReadOnlyList<DeviceKey> PaintableKeys { get; }
+    public bool PaintsKeys => PaintableKeys.Count > 0;
 
     public bool ShowFrameEditor => SelectedEffect?.Kind == EffectKind.Custom;
     public bool ShowBrightness => !ShowFrameEditor || _model?.Has("onboard_profiles") != true;

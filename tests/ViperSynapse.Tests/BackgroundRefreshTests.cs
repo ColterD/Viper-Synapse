@@ -243,8 +243,8 @@ public sealed class BackgroundRefreshTests
         window.Show();
         try
         {
-            var tabBar = window.GetVisualDescendants().OfType<ListBox>().Single(list => list.Classes.Contains("topTabs"));
-            var icons = tabBar.GetVisualDescendants().OfType<PathIcon>().Where(icon => icon.IsEffectivelyVisible).ToArray();
+            var tabBars = window.GetVisualDescendants().OfType<ListBox>().Where(list => list.Classes.Contains("topTabs"));
+            var icons = tabBars.SelectMany(bar => bar.GetVisualDescendants()).OfType<PathIcon>().Where(icon => icon.IsEffectivelyVisible).ToArray();
             Assert.Equal(5, icons.Length);
             Assert.All(icons, icon =>
             {
@@ -252,6 +252,43 @@ public sealed class BackgroundRefreshTests
                 Assert.True(icon.Bounds.Width >= 24);
                 Assert.True(icon.Bounds.Height >= 24);
             });
+            return true;
+        }
+        finally
+        {
+            window.Close();
+            await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([]));
+        }
+    }, CancellationToken.None);
+
+    [Fact]
+    public Task Application_tabs_stay_reachable_when_device_tabs_overflow() => HeadlessApp.Session.Dispatch<bool>(async () =>
+    {
+        var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+        DeviceInfo[] units = Enumerable.Range(0, 12).Select(i => Mouse($"usb-{i}") with
+        {
+            Key = $"test-{i}",
+            Name = $"Emulated device with a longer name {i}",
+        }).ToArray();
+        await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>(units));
+        var window = new MainWindow { DataContext = main, Width = 1080, Height = 680 };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            var primary = Assert.IsType<ListBox>(window.FindControl<ListBox>("PrimaryTabsList"));
+            var devices = Assert.IsType<ListBox>(window.FindControl<ListBox>("DeviceTabsList"));
+            Assert.Equal(4, primary.ItemCount);
+            Assert.Equal(units.Length, devices.ItemCount);
+            var settings = Assert.IsType<ListBoxItem>(primary.ContainerFromIndex(3));
+            Assert.True(settings.Bounds.Right <= primary.Bounds.Width);
+
+            var last = main.Devices.Last();
+            devices.SelectedItem = last;
+            Assert.Same(last, main.SelectedTab);
+            primary.SelectedItem = main.Settings;
+            Assert.Same(main.Settings, main.SelectedTab);
+            Assert.Null(devices.SelectedItem);
             return true;
         }
         finally

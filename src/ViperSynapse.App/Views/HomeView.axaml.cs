@@ -17,6 +17,12 @@ public sealed partial class HomeView : UserControl
             Home?.Open(device);
     }
 
+    void OpenHealth(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: DeviceViewModel device, DataContext: DashboardUnitAttention attention })
+            Home?.OpenHealth(device, attention.Unit);
+    }
+
     void OpenDeviceSetup(object? sender, RoutedEventArgs e)
     {
         if (TopLevel.GetTopLevel(this) is { } top)

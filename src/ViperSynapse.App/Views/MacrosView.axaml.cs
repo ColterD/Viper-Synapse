@@ -24,11 +24,6 @@ public sealed partial class MacrosView : UserControl
             if (DataContext is MacrosViewModel macros)
                 macros.RecordOptionsRequested += () => RecordOptions.Flyout?.ShowAt(RecordOptions);
         };
-        AssignTile.PointerPressed += (_, e) =>
-        {
-            if (e.GetCurrentPoint(AssignTile).Properties.IsLeftButtonPressed && DataContext is MacrosViewModel macros)
-                macros.StartAssigningCommand.Execute(null);
-        };
     }
 
     void CancelAssign(object? sender, RoutedEventArgs e)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Tmds.DBus.Protocol;
@@ -18,12 +19,16 @@ public sealed record DeviceInfo(
     string? Serial, string? Firmware, string? ControlNode, IReadOnlyList<string> InputNodes, bool Remapping, string? Problem,
     IReadOnlyList<ushort>? InputControls = null, string? InputControlsStatus = null, string? Connection = null,
     byte? OnboardProfile = null, bool NativeMacroKeys = false,
-    string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null);
+    string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null,
+    bool? VirtualOutputReady = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]
 [JsonSerializable(typeof(DeviceState))]
 internal sealed partial class ClientJson : JsonSerializerContext;
+
+internal sealed class SettingsConflictException() : InvalidOperationException(
+    "Settings changed in the service while you were editing. Reload and review the changes before saving again.");
 
 /// <summary>
 /// The window's line to viper-synapsed on the session bus. Every call is asynchronous and completes on a
@@ -36,6 +41,12 @@ public sealed class DaemonClient : IAsyncDisposable
     const string BusName = "org.vipersynapse.Daemon", ObjectPath = "/org/vipersynapse/Daemon", Interface = "org.vipersynapse.Daemon1";
 
     DBusConnection? _connection;
+    readonly ConditionalWeakTable<object, RevisionTag> _revisions = new();
+
+    sealed class RevisionTag
+    {
+        public string? Value;
+    }
 
     public event Action? DevicesChanged;
     public event Action<string>? SettingsChanged;
@@ -85,51 +96,88 @@ public sealed class DaemonClient : IAsyncDisposable
 
     async Task EnsureDaemonAsync(CancellationToken cancel)
     {
-        if (await TryPingAsync().ConfigureAwait(false))
+        Process? child = null;
+        try
         {
-            // A service from another build (an update installed while it ran) is replaced by this build's own.
-            if (await CallStringAsync("BuildId").ConfigureAwait(false) == Service.DaemonBus.BuildId)
-                return;
-            await QuitServiceAsync().ConfigureAwait(false);
-            for (int i = 0; i < 50 && await TryPingAsync().ConfigureAwait(false); i++)
-                await Task.Delay(100, cancel).ConfigureAwait(false);
+            await EnsureMatchingBuildAsync(Service.DaemonBus.BuildId,
+                () => ServiceHasOwnerAsync().WaitAsync(TimeSpan.FromSeconds(2), cancel), () => RunningBuildAsync(cancel),
+                () => QuitServiceAsync().WaitAsync(TimeSpan.FromSeconds(2), cancel), () => child = StartService(),
+                () => child?.HasExited == true ? child.ExitCode : null,
+                TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), cancel).ConfigureAwait(false);
         }
-        StartService();
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
+        finally
         {
-            cancel.ThrowIfCancellationRequested();
-            await Task.Delay(100, cancel).ConfigureAwait(false);
-            if (await TryPingAsync().ConfigureAwait(false))
-                return;
+            child?.Dispose();
         }
-        throw new TimeoutException($"The {AppBranding.Name} service did not start. Is the udev rule installed?");
     }
 
-    async Task<bool> TryPingAsync()
+    internal static async Task EnsureMatchingBuildAsync(string expected, Func<Task<bool>> hasOwner,
+        Func<Task<string?>> readBuild, Func<Task> quit, Action start, Func<int?> exitCode,
+        TimeSpan stopTimeout, TimeSpan startTimeout, CancellationToken cancel = default)
+    {
+        if (await hasOwner().ConfigureAwait(false))
+        {
+            if (await readBuild().ConfigureAwait(false) == expected)
+                return;
+            await quit().ConfigureAwait(false);
+            var stopping = Stopwatch.StartNew();
+            while (await hasOwner().ConfigureAwait(false))
+            {
+                if (stopping.Elapsed >= stopTimeout)
+                    throw new TimeoutException("The previous Viper service is still running. Quit it and retry the scan.");
+                await Task.Delay(100, cancel).ConfigureAwait(false);
+            }
+        }
+        cancel.ThrowIfCancellationRequested();
+        start();
+        var starting = Stopwatch.StartNew();
+        do
+        {
+            if (await readBuild().ConfigureAwait(false) == expected)
+                return;
+            if (exitCode() is int exit)
+                throw new InvalidOperationException($"The matching {AppBranding.Name} service exited during startup (exit code {exit}).");
+            if (starting.Elapsed >= startTimeout)
+                break;
+            await Task.Delay(100, cancel).ConfigureAwait(false);
+        } while (starting.Elapsed < startTimeout);
+        throw new TimeoutException($"The matching {AppBranding.Name} service did not become ready. Check the installed app and service builds.");
+    }
+
+    async Task<string?> RunningBuildAsync(CancellationToken cancel)
     {
         try
         {
-            await CallStringAsync("Ping").ConfigureAwait(false);
-            return true;
+            return await CallStringAsync("BuildId").WaitAsync(TimeSpan.FromSeconds(2), cancel).ConfigureAwait(false);
         }
         catch (DBusErrorReplyException)
         {
-            return false;
+            return null;
         }
     }
 
-    static void StartService()
+    Task<bool> ServiceHasOwnerAsync()
+    {
+        var connection = Connection;
+        using var writer = connection.GetMessageWriter();
+        writer.WriteMethodCallHeader(destination: "org.freedesktop.DBus", path: "/org/freedesktop/DBus",
+            @interface: "org.freedesktop.DBus", member: "NameHasOwner", signature: "s");
+        writer.WriteString(BusName);
+        return connection.CallMethodAsync(writer.CreateMessage(), static (Message m, object? _) => m.GetBodyReader().ReadBool(), null);
+    }
+
+    static Process StartService()
     {
         var next = Path.Combine(AppContext.BaseDirectory, "viper-synapsed");
         var info = File.Exists(next) ? new ProcessStartInfo(next) : new ProcessStartInfo("viper-synapsed");
         info.UseShellExecute = false;
         try
         {
-            using var _ = Process.Start(info);
+            return Process.Start(info) ?? throw new InvalidOperationException("Could not start the Viper service process.");
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception e)
         {
+            throw new InvalidOperationException($"Could not start the Viper service ({info.FileName}): {e.Message}", e);
         }
     }
 
@@ -157,21 +205,87 @@ public sealed class DaemonClient : IAsyncDisposable
     public async Task<OnboardRestoreResult> RestoreOnboardAsync(OnboardArchiveRequest request) =>
         OnboardBackupCodec.ReadResult(await CallStringAsync("RestoreOnboard", OnboardBackupCodec.WriteRequest(request)).ConfigureAwait(false));
 
-    public async Task<DeviceSettings> GetSettingsAsync(string device) =>
-        SettingsJson.ReadSettings(await CallStringAsync("GetSettings", device).ConfigureAwait(false));
+    public Task<DeviceSettings> GetSettingsAsync(string device) =>
+        ReadSnapshotAsync("GetSettingsSnapshot", SettingsJson.ReadSettings, device);
 
-    public Task SetSettingsAsync(string device, DeviceSettings settings) =>
-        CallAsync("SetSettings", "ss", device, SettingsJson.Write(settings));
+    public async Task SetSettingsAsync(string device, DeviceSettings settings, DeviceSettings? baseline = null) =>
+        await CommitSettingsAsync(device, settings, baseline).ConfigureAwait(false);
 
-    public async Task<MacroLibrary> GetMacrosAsync() =>
-        SettingsJson.ReadMacros(await CallStringAsync("GetMacros").ConfigureAwait(false));
+    internal Task<SettingsCommitResult> CommitSettingsAsync(string device, DeviceSettings settings, DeviceSettings? baseline) =>
+        CommitAsync("CommitSettings", "GetSettingsSnapshot", settings, baseline, SettingsJson.Write(settings), device);
 
-    public Task SetMacrosAsync(MacroLibrary macros) => CallAsync("SetMacros", "s", SettingsJson.Write(macros));
+    public Task<MacroLibrary> GetMacrosAsync() => ReadSnapshotAsync("GetMacrosSnapshot", SettingsJson.ReadMacros);
 
-    public async Task<ShortcutList> GetShortcutsAsync() =>
-        SettingsJson.ReadShortcuts(await CallStringAsync("GetShortcuts").ConfigureAwait(false));
+    public async Task SetMacrosAsync(MacroLibrary macros, MacroLibrary? baseline = null) =>
+        await CommitAsync("CommitMacros", "GetMacrosSnapshot", macros, baseline, SettingsJson.Write(macros)).ConfigureAwait(false);
 
-    public Task SetShortcutsAsync(ShortcutList shortcuts) => CallAsync("SetShortcuts", "s", SettingsJson.Write(shortcuts));
+    public Task<ShortcutList> GetShortcutsAsync() => ReadSnapshotAsync("GetShortcutsSnapshot", SettingsJson.ReadShortcuts);
+
+    public async Task SetShortcutsAsync(ShortcutList shortcuts, ShortcutList? baseline = null) =>
+        await CommitAsync("CommitShortcuts", "GetShortcutsSnapshot", shortcuts, baseline, SettingsJson.Write(shortcuts)).ConfigureAwait(false);
+
+    public Task RetryDiscoveryAsync() => CallAsync("RetryDiscovery", null);
+
+    internal bool IsConnected => _connection != null;
+
+    internal async Task<UnitApplyOutcome> RetryUnitApplyAsync(string key, UnitApplyOutcome unit) =>
+        JsonSerializer.Deserialize(await CallStringAsync("RetryUnitApply", key, unit.Port, unit.ProductId, unit.Serial ?? "")
+            .ConfigureAwait(false), SettingsCommitJson.Default.UnitApplyOutcome) ?? throw new InvalidDataException("No device result was returned.");
+
+    async Task<T> ReadSnapshotAsync<T>(string member, Func<string, T> parse, params string[] scope) where T : class
+    {
+        var snapshot = await ReadSnapshotEnvelopeAsync(member, scope).ConfigureAwait(false);
+        var value = parse(snapshot.Json);
+        _revisions.GetValue(value, static _ => new()).Value = snapshot.Revision;
+        return value;
+    }
+
+    async Task<SettingsSnapshot> ReadSnapshotEnvelopeAsync(string member, string[] scope) =>
+        JsonSerializer.Deserialize(await CallStringAsync(member, scope).ConfigureAwait(false), SettingsCommitJson.Default.SettingsSnapshot)
+            ?? throw new InvalidDataException("The service returned no settings snapshot.");
+
+    async Task<SettingsCommitResult> CommitAsync(string member, string readMember, object edited, object? baseline,
+        string json, params string[] scope)
+    {
+        var expected = baseline == null
+            ? (await ReadSnapshotEnvelopeAsync(readMember, scope).ConfigureAwait(false)).Revision
+            : _revisions.TryGetValue(baseline, out var revision) ? revision.Value : null;
+        if (expected == null)
+            throw new InvalidOperationException("The original settings have not loaded. Reload before saving your changes.");
+        var editedRevision = _revisions.GetValue(edited, static _ => new());
+        editedRevision.Value = expected;
+        var result = await WriteSnapshotAsync(member, scope, expected, json).ConfigureAwait(false);
+        bool persistedExactSnapshot = result.Saved;
+        if (!result.Saved && baseline is DeviceSettings original && edited is DeviceSettings change &&
+            original.ActiveProfile == change.ActiveProfile && original.ActiveKeymap == change.ActiveKeymap)
+        {
+            // Automatic profile switches only change the selection, not the profiles being edited.
+            // Replay the edit over that selection once, leaving every conflicting content change alone.
+            var latest = await ReadSnapshotEnvelopeAsync(readMember, scope).ConfigureAwait(false);
+            if (RebaseOverProfileSelection(latest.Json, original, change) is { } rebased)
+                result = await WriteSnapshotAsync(member, scope, latest.Revision, SettingsJson.Write(rebased)).ConfigureAwait(false);
+        }
+        if (!result.Saved)
+            throw new SettingsConflictException();
+        // A rebased write has different active selection from the local object. Keep that object's old
+        // revision so a subsequent pending edit still compares the selection explicitly.
+        if (persistedExactSnapshot)
+            editedRevision.Value = result.Revision;
+        return result;
+    }
+
+    async Task<SettingsCommitResult> WriteSnapshotAsync(string member, string[] scope, string expected, string json) =>
+        JsonSerializer.Deserialize(await CallStringAsync(member, [.. scope, expected, json]).ConfigureAwait(false),
+            SettingsCommitJson.Default.SettingsCommitResult) ?? throw new InvalidDataException("The service returned no save result.");
+
+    internal static DeviceSettings? RebaseOverProfileSelection(string latestJson, DeviceSettings original, DeviceSettings change)
+    {
+        var latest = SettingsJson.ReadSettings(latestJson);
+        var normalized = latest with { ActiveProfile = original.ActiveProfile, ActiveKeymap = original.ActiveKeymap };
+        return SettingsJson.Write(normalized) == SettingsJson.Write(original)
+            ? change with { ActiveProfile = latest.ActiveProfile, ActiveKeymap = latest.ActiveKeymap }
+            : null;
+    }
 
     /// <summary>Follow the device's thumbstick for the next 15 seconds (ask again to keep following).</summary>
     public Task WatchStickAsync(string device) => CallAsync("WatchStick", "s", device);
@@ -242,10 +356,10 @@ public sealed class DaemonClient : IAsyncDisposable
         return writer.CreateMessage();
     }
 
-    async Task<string> CallStringAsync(string member, string? argument = null)
+    async Task<string> CallStringAsync(string member, params string[] arguments)
     {
         var connection = Connection;
-        var message = argument == null ? Build(connection, member, null, []) : Build(connection, member, "s", [argument]);
+        var message = Build(connection, member, arguments.Length == 0 ? null : new string('s', arguments.Length), arguments);
         return await connection.CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadString(), null).ConfigureAwait(false);
     }
 

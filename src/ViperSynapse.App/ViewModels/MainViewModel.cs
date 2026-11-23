@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ViperSynapse.App.Services;
 using ViperSynapse.Core.Bindings;
+using ViperSynapse.Core.Protocol;
 
 namespace ViperSynapse.App.ViewModels;
 
@@ -48,6 +49,19 @@ public sealed partial class MainViewModel : ObservableObject
     long _requestedDeviceSnapshot;
 
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
+    public IReadOnlyList<TabViewModel> PrimaryTabs { get; }
+
+    public TabViewModel? SelectedPrimaryTab
+    {
+        get => SelectedTab is DeviceViewModel ? null : SelectedTab;
+        set { if (value != null) SelectedTab = value; }
+    }
+
+    public DeviceViewModel? SelectedDeviceTab
+    {
+        get => SelectedTab as DeviceViewModel;
+        set { if (value != null) SelectedTab = value; }
+    }
 
     [ObservableProperty]
     public partial TabViewModel? SelectedTab { get; set; }
@@ -67,15 +81,15 @@ public sealed partial class MainViewModel : ObservableObject
     public MainViewModel(DaemonClient client, AppPreferences preferences, bool startAtLogin, string built = "")
     {
         _client = client;
-        WriteDeviceSettingsAsync = client.SetSettingsAsync;
         ConnectServiceAsync = () => client.ConnectAsync();
         ReadDeviceListAsync = client.GetDevicesAsync;
         ReadDeviceSettingsAsync = client.GetSettingsAsync;
         ReadLiveDeviceAsync = client.GetUnitStateAsync;
-        Settings = new SettingsViewModel(this, preferences, startAtLogin, built);
+        Settings = new SettingsViewModel(preferences, startAtLogin, built);
         Home = new HomeViewModel(this);
         LinkedGames = new LinkedGamesViewModel(this);
         Macros = new MacrosViewModel(client, this);
+        PrimaryTabs = [Home, LinkedGames, Macros, Settings];
         Tabs.Add(Home);
         Tabs.Add(LinkedGames);
         Tabs.Add(Macros);
@@ -96,7 +110,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public DaemonClient Client => _client;
 
-    internal Func<string, DeviceSettings, Task> WriteDeviceSettingsAsync { get; init; }
+    internal Func<string, DeviceSettings, Task>? WriteDeviceSettingsAsync { get; init; }
 
     internal (long Revision, Task Completion) DeviceSaveState(string key) =>
         _deviceSaves.GetValueOrDefault(key, (0, Task.CompletedTask));
@@ -108,18 +122,44 @@ public sealed partial class MainViewModel : ObservableObject
         return Task.WhenAll(_deviceSaves.Values.Select(save => save.Completion)).WaitAsync(timeout);
     }
 
-    // The service stores profiles by model, even if a particular unit is unplugged or a tab is recreated.
-    internal void SaveDeviceSettings(string key, DeviceSettings settings)
+    internal async Task<bool> FinishWorkspaceEditsAsync(TimeSpan timeout)
     {
-        var previous = DeviceSaveState(key);
-        _deviceSaves[key] = (previous.Revision + 1, SaveAfterAsync(previous.Completion, key, settings));
+        await Task.WhenAll(FinishDeviceEditsAsync(timeout), Macros.PendingSave, Home.Shortcuts.PendingSave,
+            Settings.PendingSave).WaitAsync(timeout);
+        return !Macros.HasFailedSave && !Home.Shortcuts.HasFailedSave && !Settings.HasFailedSave &&
+            !_deviceSaveFeedback.Values.Any(feedback => feedback.Error != null);
     }
 
-    async Task SaveAfterAsync(Task previous, string key, DeviceSettings settings)
+    // The service stores profiles by model, even if a particular unit is unplugged or a tab is recreated.
+    internal Task<Exception?> SaveDeviceSettings(string key, DeviceSettings settings, DeviceSettings? baseline = null)
+    {
+        var previous = DeviceSaveState(key);
+        long revision = previous.Revision + 1;
+        SetSaveFeedback(key, new(revision, true, settings, baseline));
+        var pending = SaveAfterAsync(previous.Completion, key, revision, settings, baseline);
+        _deviceSaves[key] = (revision, pending);
+        return pending;
+    }
+
+    async Task<Exception?> SaveAfterAsync(Task previous, string key, long revision, DeviceSettings settings, DeviceSettings? baseline)
     {
         await previous.ConfigureAwait(false);
-        try { await WriteDeviceSettingsAsync(key, settings).ConfigureAwait(false); }
-        catch (Exception e) { Fail("Could not save the device settings", e); }
+        try
+        {
+            IReadOnlyList<UnitApplyOutcome>? units = null;
+            if (WriteDeviceSettingsAsync is { } write)
+                await write(key, settings).ConfigureAwait(false);
+            else
+                units = (await Client.CommitSettingsAsync(key, settings, baseline).ConfigureAwait(false)).Units;
+            await Dispatcher.UIThread.InvokeAsync(() => CompleteSave(key, revision, units, null));
+            return null;
+        }
+        catch (Exception e)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => CompleteSave(key, revision, null, e));
+            Fail("Could not save the device settings", e, () => GetSaveFeedback(key)?.Revision == revision);
+            return e;
+        }
     }
 
     public MacroLibrary MacroLibrary => Macros.Library;
@@ -139,6 +179,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (newValue == Macros)
             Macros.KeymapsChanged();
         OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(SelectedPrimaryTab));
+        OnPropertyChanged(nameof(SelectedDeviceTab));
         OnPropertyChanged(nameof(CanGoBack));
         OnPropertyChanged(nameof(CanGoForward));
     }
@@ -178,7 +220,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     async Task RefreshWorkspaceAsync(bool reloadExisting)
     {
-        if (!await RefreshDevicesAsync(ReadConnectedDevicesAsync, reloadExisting: reloadExisting))
+        if (!await RefreshDevicesAsync(() => ReadConnectedDevicesAsync(reloadExisting), reloadExisting: reloadExisting))
             return;
         try
         {
@@ -195,13 +237,15 @@ public sealed partial class MainViewModel : ObservableObject
     internal Func<string, Task<DeviceSettings>> ReadDeviceSettingsAsync { get; init; }
     internal Func<DeviceInfo, Task<DeviceState?>> ReadLiveDeviceAsync { get; init; }
 
-    async Task<IReadOnlyList<DeviceInfo>> ReadConnectedDevicesAsync()
+    async Task<IReadOnlyList<DeviceInfo>> ReadConnectedDevicesAsync(bool retryHardware = false)
     {
         await _discoveryGate.WaitAsync().ConfigureAwait(false);
         try
         {
             if (!_serviceReady)
                 await ConnectServiceAsync().ConfigureAwait(false);
+            if (retryHardware && Client.IsConnected)
+                await Client.RetryDiscoveryAsync().ConfigureAwait(false);
             var devices = await ReadDeviceListAsync().ConfigureAwait(false);
             _serviceReady = true;
             return devices;
@@ -231,7 +275,7 @@ public sealed partial class MainViewModel : ObservableObject
             do
             {
                 _backgroundScanPending = false;
-                await RefreshDevicesAsync(ReadConnectedDevicesAsync, showScanning: false);
+                await RefreshDevicesAsync(() => ReadConnectedDevicesAsync(), showScanning: false);
             }
             while (_backgroundScanPending);
         }
@@ -453,4 +497,13 @@ public sealed partial class HomeViewModel(MainViewModel main) : TabViewModel
     }
 
     public void Open(DeviceViewModel device) => main.Show(device);
+
+    public void OpenHealth(DeviceViewModel device, DeviceUnitChoice unit)
+    {
+        if (!Devices.Contains(device) || !device.UnitChoices.Contains(unit))
+            return;
+        device.InspectedUnit = unit;
+        device.SelectedPage = DeviceViewModel.HealthPage;
+        main.Show(device);
+    }
 }
