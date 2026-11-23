@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ViperSynapse.Core.Bindings;
@@ -8,8 +9,7 @@ namespace ViperSynapse.Service;
 /// <summary>
 /// Settings on disk under $XDG_CONFIG_HOME/viper-synapse: one file per device model
 /// (devices/02eb.json), the macro library (macros.json) and the global shortcuts (shortcuts.json). Writes go to a temporary file that is renamed
-/// over the old one, so a crash never leaves half a file. A file that cannot be read is set aside as
-/// *.broken and replaced with defaults rather than stopping the service.
+/// over the old one. An unreadable file is set aside with a unique .broken suffix and defaults are used.
 /// </summary>
 public sealed class SettingsStore(string root)
 {
@@ -183,10 +183,13 @@ public sealed class SettingsStore(string root)
             {
                 return parse(File.ReadAllText(path));
             }
-            catch (Exception e) when (e is System.Text.Json.JsonException or InvalidDataException or NotSupportedException)
+            catch (Exception e) when (e is JsonException or InvalidDataException or NotSupportedException)
             {
-                Console.Error.WriteLine($"{path}: unreadable ({e.Message}); kept as {path}.broken, starting from defaults.");
-                File.Move(path, path + ".broken", overwrite: true);
+                var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+                var recovery = $"{path}.broken-{timestamp}-{Guid.NewGuid():N}";
+                File.Move(path, recovery);
+                AdvanceRevision(path);
+                Console.Error.WriteLine($"{path}: unreadable ({e.Message}); kept as {recovery}, starting from defaults.");
                 return fallback();
             }
         }

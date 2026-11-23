@@ -56,17 +56,44 @@ public sealed record MacroLibrary(IReadOnlyList<Macro> Macros)
 /// <summary>The JSON form of settings and macros: what is stored on disk and what crosses D-Bus.</summary>
 public static class SettingsJson
 {
-    public static string Write(DeviceSettings settings) => JsonSerializer.Serialize(settings, SettingsJsonContext.Default.DeviceSettings);
-    public static DeviceSettings ReadSettings(string json) =>
-        JsonSerializer.Deserialize(json, SettingsJsonContext.Default.DeviceSettings) ?? throw new InvalidDataException("Empty device settings.");
+    public static string Write(DeviceSettings settings)
+    {
+        SettingsValidation.Validate(settings);
+        return JsonSerializer.Serialize(settings, SettingsJsonContext.Default.DeviceSettings);
+    }
 
-    public static string Write(MacroLibrary macros) => JsonSerializer.Serialize(macros, SettingsJsonContext.Default.MacroLibrary);
-    public static MacroLibrary ReadMacros(string json) =>
-        JsonSerializer.Deserialize(json, SettingsJsonContext.Default.MacroLibrary) ?? throw new InvalidDataException("Empty macro library.");
+    public static DeviceSettings ReadSettings(string json)
+    {
+        var settings = JsonSerializer.Deserialize(json, SettingsJsonContext.Default.DeviceSettings);
+        SettingsValidation.Validate(settings);
+        return settings;
+    }
 
-    public static string Write(ShortcutList shortcuts) => JsonSerializer.Serialize(shortcuts, SettingsJsonContext.Default.ShortcutList);
-    public static ShortcutList ReadShortcuts(string json) =>
-        JsonSerializer.Deserialize(json, SettingsJsonContext.Default.ShortcutList) ?? throw new InvalidDataException("Empty shortcut list.");
+    public static string Write(MacroLibrary macros)
+    {
+        SettingsValidation.Validate(macros);
+        return JsonSerializer.Serialize(macros, SettingsJsonContext.Default.MacroLibrary);
+    }
+
+    public static MacroLibrary ReadMacros(string json)
+    {
+        var macros = JsonSerializer.Deserialize(json, SettingsJsonContext.Default.MacroLibrary);
+        SettingsValidation.Validate(macros);
+        return macros;
+    }
+
+    public static string Write(ShortcutList shortcuts)
+    {
+        SettingsValidation.Validate(shortcuts);
+        return JsonSerializer.Serialize(shortcuts, SettingsJsonContext.Default.ShortcutList);
+    }
+
+    public static ShortcutList ReadShortcuts(string json)
+    {
+        var shortcuts = JsonSerializer.Deserialize(json, SettingsJsonContext.Default.ShortcutList);
+        SettingsValidation.Validate(shortcuts);
+        return shortcuts;
+    }
 
     public static string Write(IReadOnlyList<MacroStep> steps) => JsonSerializer.Serialize(steps, SettingsJsonContext.Default.IReadOnlyListMacroStep);
     public static IReadOnlyList<MacroStep> ReadSteps(string json) =>
