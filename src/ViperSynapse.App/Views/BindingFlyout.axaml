@@ -10,9 +10,18 @@
             <!-- Title bar: the key, and a close cross. -->
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Height="36" Background="#1A1A1A">
                 <TextBlock Text="{Binding Title}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#DDDDDD" />
-                <Button Grid.Column="1" Classes="flat" Content="✕" Command="{Binding CancelCommand}" />
+                <Button Grid.Column="1" Classes="flat" Content="✕" Command="{Binding CancelCommand}" IsEnabled="{Binding !IsSaving}" />
             </Grid>
-            <Grid ColumnDefinitions="40,*">
+            <StackPanel DockPanel.Dock="Top" Margin="16,8" Spacing="4" IsVisible="{Binding HasTargetStatus}">
+                <TextBlock Text="{Binding Target}" TextWrapping="Wrap" Classes="caption"
+                           IsVisible="{Binding Target, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Text="{Binding Conflict}" TextWrapping="Wrap" Classes="deviceStatusText statusUnavailable"
+                           IsVisible="{Binding Conflict, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock Text="{Binding SaveError}" TextWrapping="Wrap" Classes="deviceStatusText statusUnavailable"
+                           IsVisible="{Binding SaveError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock Text="Saving binding…" Classes="caption" IsVisible="{Binding IsSaving}" AutomationProperties.LiveSetting="Polite" />
+            </StackPanel>
+            <Grid ColumnDefinitions="40,*" IsEnabled="{Binding !IsSaving}">
                 <ListBox Classes="rail" ItemsSource="{x:Static vm:BindingEditorViewModel.Functions}" SelectedItem="{Binding SelectedFunction}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:FunctionEntry">
@@ -28,7 +37,7 @@
                                Text="The mouse may still change its DPI stage when this button is remapped or disabled in Viper." />
 
                     <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Default}"
-                               Text="The key does what it does without Viper Synapse." TextWrapping="Wrap" Foreground="#AAAAAA" />
+                               Text="The key keeps its default behavior." TextWrapping="Wrap" Foreground="#AAAAAA" />
 
                     <!-- Keyboard function: press the key to send, tick the modifiers to hold with it. -->
                     <StackPanel Spacing="10" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Keyboard}">
@@ -96,7 +105,7 @@
                                Text="The key does nothing." Foreground="#AAAAAA" />
 
                     <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
-                        <Button Classes="cancel" Content="CANCEL" Command="{Binding CancelCommand}" />
+                        <Button Classes="cancel" Content="CANCEL" Command="{Binding CancelCommand}" IsEnabled="{Binding !IsSaving}" />
                         <Button Classes="save" Content="SAVE" Command="{Binding SaveCommand}" IsEnabled="{Binding CanSave}" />
                     </StackPanel>
                 </StackPanel>

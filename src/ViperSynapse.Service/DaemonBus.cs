@@ -25,6 +25,9 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
           <method name="GetDevices"><arg direction="out" type="s" name="json"/></method>
           <method name="GetSettings"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
           <method name="SetSettings"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/></method>
+          <method name="GetSettingsSnapshot"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="snapshot"/></method>
+          <method name="CommitSettings"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="revision"/><arg direction="in" type="s" name="json"/><arg direction="out" type="s" name="result"/></method>
+          <method name="RetryUnitApply"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="port"/><arg direction="in" type="s" name="productId"/><arg direction="in" type="s" name="serial"/><arg direction="out" type="s" name="result"/></method>
           <method name="ExportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="profileId"/><arg direction="out" type="s" name="json"/></method>
           <method name="ImportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/><arg direction="in" type="b" name="replace"/><arg direction="in" type="b" name="allowLaunch"/></method>
           <method name="GetDeviceState"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
@@ -36,6 +39,11 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
           <method name="SetMacros"><arg direction="in" type="s" name="json"/></method>
           <method name="GetShortcuts"><arg direction="out" type="s" name="json"/></method>
           <method name="SetShortcuts"><arg direction="in" type="s" name="json"/></method>
+          <method name="GetMacrosSnapshot"><arg direction="out" type="s" name="snapshot"/></method>
+          <method name="CommitMacros"><arg direction="in" type="s" name="revision"/><arg direction="in" type="s" name="json"/><arg direction="out" type="s" name="result"/></method>
+          <method name="GetShortcutsSnapshot"><arg direction="out" type="s" name="snapshot"/></method>
+          <method name="CommitShortcuts"><arg direction="in" type="s" name="revision"/><arg direction="in" type="s" name="json"/><arg direction="out" type="s" name="result"/></method>
+          <method name="RetryDiscovery"/>
           <method name="ActiveWindow"><arg direction="in" type="s" name="windowClass"/><arg direction="in" type="v" name="pid"/></method>
           <method name="BuildId"><arg direction="out" type="s" name="id"/></method>
           <method name="WatchStick"><arg direction="in" type="s" name="device"/></method>
@@ -52,6 +60,8 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
     readonly Func<IEnumerable<string>> _recordFrom;
     readonly Action _quit;
     readonly Lock _recordGate = new();
+    readonly Lock _mutationGate = new();
+    Task _pendingMutation = Task.CompletedTask;
     DBusConnection? _connection;
     MacroRecorder? _recorder;
 
@@ -93,24 +103,36 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
 
     public ValueTask HandleMethodAsync(MethodContext context)
     {
-        // Device and file work stays off the connection's own thread.
-        return new ValueTask(Task.Run(() =>
+        // Enqueue configuration mutations before dispatch. File locking alone cannot preserve the
+        // order of two legacy callers that enqueue whole snapshots on the same connection.
+        if (context.Request.InterfaceAsString == Interface && context.Request.MemberAsString is
+            "SetSettings" or "CommitSettings" or "SetMacros" or "CommitMacros" or "SetShortcuts" or "CommitShortcuts" or "ImportProfile")
         {
-            try { Handle(context); }
-            catch (Exception e) when (e is System.Text.Json.JsonException or InvalidDataException or NotSupportedException or ArgumentException)
+            lock (_mutationGate)
             {
-                context.ReplyError(InvalidError, e.Message);
+                var previous = _pendingMutation;
+                _pendingMutation = previous.ContinueWith(_ => HandleSafely(context), TaskScheduler.Default);
+                return new ValueTask(_pendingMutation);
             }
-            // Anything else (a device gone mid-write, a full disk) is answered too: the caller gets an error instead of
-            // a timeout, and one bad call never takes the service down.
+        }
+        return new ValueTask(Task.Run(() => HandleSafely(context)));
+    }
+
+    void HandleSafely(MethodContext context)
+    {
+        try { Handle(context); }
+        catch (Exception e) when (e is System.Text.Json.JsonException or InvalidDataException or NotSupportedException or ArgumentException)
+        {
+            context.ReplyError(InvalidError, e.Message);
+        }
+        // A device can disappear mid-write, or a disk can fill. Reply instead of leaving the caller to time out.
 #pragma warning disable CA1031
-            catch (Exception e)
+        catch (Exception e)
 #pragma warning restore CA1031
-            {
-                Console.Error.WriteLine($"{context.Request.MemberAsString}: {e.Message}");
-                context.ReplyError("org.vipersynapse.Error.Failed", e.Message);
-            }
-        }));
+        {
+            Console.Error.WriteLine($"{context.Request.MemberAsString}: {e.Message}");
+            context.ReplyError("org.vipersynapse.Error.Failed", e.Message);
+        }
     }
 
     void Handle(MethodContext context)
@@ -150,6 +172,18 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
                 ReplyEmpty(context);
                 break;
             }
+            case "GetSettingsSnapshot":
+                ReplySnapshot(context, _devices.SettingsSnapshot(DeviceKey(reader.ReadString())));
+                break;
+            case "CommitSettings":
+                ReplyCommit(context, _devices.CommitSettings(DeviceKey(reader.ReadString()), reader.ReadString(),
+                    SettingsJson.ReadSettings(Json(reader.ReadString()))));
+                break;
+            case "RetryUnitApply":
+                var outcome = _devices.RetryUnitApply(DeviceKey(reader.ReadString()), reader.ReadString(),
+                    DeviceKey(reader.ReadString()), reader.ReadString());
+                ReplyString(context, System.Text.Json.JsonSerializer.Serialize(outcome, SettingsCommitJson.Default.UnitApplyOutcome));
+                break;
             case "ExportProfile":
             {
                 string key = DeviceKey(reader.ReadString()), profileId = reader.ReadString();
@@ -213,6 +247,23 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
                 break;
             case "SetShortcuts":
                 _devices.SetShortcuts(SettingsJson.ReadShortcuts(Json(reader.ReadString())));
+                ReplyEmpty(context);
+                break;
+            case "GetMacrosSnapshot":
+                ReplySnapshot(context, _devices.MacrosSnapshot());
+                break;
+            case "CommitMacros":
+                ReplyCommit(context, _devices.CommitMacros(reader.ReadString(), SettingsJson.ReadMacros(Json(reader.ReadString()))));
+                break;
+            case "GetShortcutsSnapshot":
+                ReplySnapshot(context, _devices.ShortcutsSnapshot());
+                break;
+            case "CommitShortcuts":
+                ReplyCommit(context, _devices.CommitShortcuts(reader.ReadString(), SettingsJson.ReadShortcuts(Json(reader.ReadString()))));
+                break;
+            case "RetryDiscovery":
+                _devices.RetryInputOutput();
+                _devices.Refresh(forceControlRetry: true);
                 ReplyEmpty(context);
                 break;
             case "ActiveWindow":
@@ -292,6 +343,12 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
     /// <summary>Device keys are product ids in hex; nothing else may reach a file name.</summary>
     static string DeviceKey(string key) =>
         key.Length == 4 && key.All(Uri.IsHexDigit) ? key.ToLowerInvariant() : throw new ArgumentException($"Not a device key: {key}");
+
+    static void ReplySnapshot(MethodContext context, SettingsSnapshot snapshot) =>
+        ReplyString(context, System.Text.Json.JsonSerializer.Serialize(snapshot, SettingsCommitJson.Default.SettingsSnapshot));
+
+    static void ReplyCommit(MethodContext context, SettingsCommitResult result) =>
+        ReplyString(context, System.Text.Json.JsonSerializer.Serialize(result, SettingsCommitJson.Default.SettingsCommitResult));
 
     static void ReplyString(MethodContext context, string value)
     {

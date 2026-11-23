@@ -65,6 +65,25 @@ internal sealed record DeviceHealth(string Model, string Connection, string Cont
         _ => info.Transport switch { "usb" => "USB", "bluetooth" => "Bluetooth", _ => "Unknown" },
     };
 
+    internal static string? AttentionReason(DeviceInfo info, DeviceModel? model)
+    {
+        bool bluetooth = info.Connection == "bluetooth";
+        var input = InputAccess(info, bluetooth || model?.Keys.Count is null or 0);
+        if (input.Status is "Unavailable" or "Needs attention")
+            return input.Reason;
+        if (!string.IsNullOrWhiteSpace(info.Problem))
+            return info.Problem;
+        if (!string.IsNullOrWhiteSpace(info.ControlIssue))
+            return info.ControlIssue;
+        if (model != null)
+        {
+            var control = ControlAccess(info, bluetooth);
+            if (control.Status != Available)
+                return control.Reason;
+        }
+        return null;
+    }
+
     static (string Status, string Reason) ControlAccess(DeviceInfo info, bool bluetoothLimited)
     {
         if (bluetoothLimited)

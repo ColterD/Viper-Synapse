@@ -50,6 +50,8 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     Profile? _lastRequestedProfile;
     PerformanceSettings? _dpiEditBaseline;
     int _failedWrites;
+    int _acknowledgedWrites;
+    int _readbackConfirmations;
     bool _disposed;
     bool HasOnboardProfiles => model?.Has("onboard_profiles") == true;
     bool IsNagaChroma => model?.ProductId == LegacyRemapControls.NagaChroma;
@@ -60,6 +62,22 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     int _sentKeymap = -1;
 
     public string? LastProblem { get; private set; }
+
+    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return new(port, productId, serial, UnitApplyStatus.Disconnected);
+            int acknowledged = _acknowledgedWrites, confirmed = _readbackConfirmations;
+            Apply(profile, keymap, refreshing);
+            acknowledged = _acknowledgedWrites - acknowledged;
+            confirmed = _readbackConfirmations - confirmed;
+            var status = LastProblem != null ? UnitApplyStatus.Failed : acknowledged > 0 ? UnitApplyStatus.Acknowledged
+                : confirmed > 0 ? UnitApplyStatus.ReadbackConfirmed : UnitApplyStatus.NoFirmwareChanges;
+            return new(port, productId, serial, status, LastProblem, acknowledged, confirmed);
+        }
+    }
 
     /// <param name="profile">The profile to bring the device in line with.</param>
     /// <param name="keymap">The keymap in use (0-based): a keypad with keymaps of its own is switched to it.</param>
@@ -89,11 +107,9 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
                 }
                 _lastRequestedProfile = profile;
             }
-            if (model?.Has("keymaps") == true && keymap != _sentKeymap)
-            {
+            if (model?.Has("keymaps") == true && keymap != _sentKeymap &&
+                Send(DeviceCommands.SelectKeymap(transactionId, keymap + 1), "keymap"))
                 _sentKeymap = keymap;
-                Send(DeviceCommands.SelectKeymap(transactionId, keymap + 1), "keymap");
-            }
             if (profile.Lighting is { IsEmpty: false } lighting && store is byte lightingSlot && SlotCanChange(SlotSettings.Lighting))
             {
                 _lighting = lighting;
@@ -179,6 +195,25 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
         if (slot == null)
             LastProblem ??= "The active onboard profile is unavailable.";
         return slot;
+    }
+
+    internal byte? ObserveOnboardProfile()
+    {
+        lock (_gate)
+        {
+            if (_disposed || !HasOnboardProfiles)
+                return null;
+            string? previousProblem = LastProblem;
+            try
+            {
+                return ReadOnboardProfile();
+            }
+            finally
+            {
+                // An observation must not replace the outcome of a user's last apply.
+                LastProblem = previousProblem;
+            }
+        }
     }
 
     void SendLighting(LightingSettings lighting, byte store)
@@ -290,6 +325,12 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     }
 
     readonly SoftwareLighting _software = new(transport, transactionId, model);
+    internal string? SoftwareLightingProblem => _software.Problem;
+    internal event Action? SoftwareLightingProblemChanged
+    {
+        add => _software.ProblemChanged += value;
+        remove => _software.ProblemChanged -= value;
+    }
 
     /// <summary>A key or button went down (its source code): for the drawn Reactive and Ripple effects. Any thread.</summary>
     public void Press(ushort source) => _software.Press(source);
@@ -480,7 +521,10 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
         {
             var answer = transport.Send(request);
             if (Acknowledges(request, answer))
+            {
+                _acknowledgedWrites++;
                 return true;
+            }
             LastProblem = $"The device did not acknowledge {what} ({answer.Status}).";
         }
         catch (IOException e)
@@ -493,7 +537,9 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
 
     bool Confirm(bool confirmed, string what)
     {
-        if (!confirmed)
+        if (confirmed)
+            _readbackConfirmations++;
+        else
         {
             LastProblem ??= $"The device did not confirm the requested {what}.";
             _failedWrites++;

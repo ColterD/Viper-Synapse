@@ -258,8 +258,8 @@
         <Setter Property="Padding" Value="0" />
     </Style>
     <Style Selector="ListBox.topTabs ListBoxItem">
-        <Setter Property="Padding" Value="14,0" />
-        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="Height" Value="40" />
         <Setter Property="CornerRadius" Value="4,4,0,0" />
         <Setter Property="BorderThickness" Value="1,1,1,0" />
         <Setter Property="BorderBrush" Value="Transparent" />
@@ -465,31 +465,67 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
     </Style>
-    <!-- Dashboard: section headers, device cards, module cards. -->
-    <Style Selector="TextBlock.section">
+    <Style Selector="StackPanel.devicePage">
+        <Setter Property="MaxWidth" Value="1040" />
+        <Setter Property="Margin" Value="24,16,24,24" />
+        <Setter Property="Spacing" Value="16" />
+    </Style>
+    <Style Selector="TextBlock.devicePageTitle">
+        <Setter Property="FontSize" Value="24" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.deviceSectionTitle">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.deviceLabel">
         <Setter Property="FontSize" Value="12" />
-        <Setter Property="Foreground" Value="#CCCCCC" />
-        <Setter Property="LetterSpacing" Value="0.6" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.deviceDetail">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.deviceStatusText">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.deviceStatusText.statusGood">
+        <Setter Property="Foreground" Value="{StaticResource StatusGoodBrush}" />
+    </Style>
+    <Style Selector="ToggleSwitch.deviceStatusToggle:checked">
+        <Setter Property="Foreground" Value="{StaticResource StatusGoodBrush}" />
+    </Style>
+    <Style Selector="TextBlock.deviceStatusText.statusWarning">
+        <Setter Property="Foreground" Value="{StaticResource StatusWarningBrush}" />
+    </Style>
+    <Style Selector="TextBlock.deviceStatusText.statusUnavailable">
+        <Setter Property="Foreground" Value="{StaticResource StatusUnavailableBrush}" />
+    </Style>
+    <Style Selector="Border.deviceStatus, Border.devicePanel">
+        <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="20" />
+    </Style>
+    <Style Selector="Border.devicePanel.statusNotice">
+        <Setter Property="Background" Value="{StaticResource StatusNoticeBrush}" />
     </Style>
     <Style Selector="Button.deviceCard">
-        <Setter Property="Width" Value="190" />
-        <Setter Property="Height" Value="190" />
-        <Setter Property="Padding" Value="10" />
-        <Setter Property="CornerRadius" Value="0" />
+        <Setter Property="Padding" Value="12" />
+        <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
-    <Style Selector="Button.moduleCard">
-        <Setter Property="Width" Value="190" />
-        <Setter Property="Height" Value="140" />
-        <Setter Property="CornerRadius" Value="0" />
-        <Setter Property="Background" Value="{StaticResource PanelBrush}" />
-        <Setter Property="HorizontalContentAlignment" Value="Center" />
-        <Setter Property="VerticalContentAlignment" Value="Center" />
-    </Style>
-    <Style Selector="Button.deviceCard:pointerover /template/ ContentPresenter, Button.moduleCard:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="#1C1C1C" />
+    <Style Selector="Button.deviceCard:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentOutlineBrush}" />
     </Style>
     <!-- Two-way switches inside a card (Quick Effects / Advanced Effects): a rounded track, the chosen half green. -->
     <Style Selector="ListBox.segmentList">

@@ -19,8 +19,8 @@ public sealed class RemapEngine
     readonly MacroRunner _macros;
     readonly Dictionary<ushort, Binding> _held = [];
     readonly Dictionary<ushort, SharedModifierSink.Owner> _owners = [];
-    readonly Dictionary<ushort, CancellationTokenSource> _running = [];
-    readonly Dictionary<Guid, CancellationTokenSource> _toggled = [];
+    readonly Dictionary<ushort, HashSet<Playback>> _running = [];
+    readonly Dictionary<Guid, Playback> _toggled = [];
     readonly HashSet<Task> _backgroundTasks = [];
     // Where each sequence macro is up to, per key.
     readonly Dictionary<(ushort, Guid), int> _sequence = [];
@@ -173,13 +173,14 @@ public sealed class RemapEngine
         }
         _held.Clear();
         _owners.Clear();
+        List<Playback> cancelled;
         lock (_running)
         {
-            foreach (var cts in _running.Values.Concat(_toggled.Values))
-                cts.Cancel();
+            cancelled = [.. _running.Values.SelectMany(runs => runs), .. _toggled.Values];
             _running.Clear();
+            _toggled.Clear();
         }
-        _toggled.Clear();
+        CancelRuns(cancelled);
         _hypershiftHeld = 0;
         _hypershiftButton = false;
         // Retry releases already queued by previous resets. Background actions can still be finishing,
@@ -208,18 +209,20 @@ public sealed class RemapEngine
     /// <summary>Stops every running and toggled macro (any-key interruption). Held turbo keys keep going.</summary>
     void StopMacros()
     {
+        List<Playback> cancelled = [];
         lock (_running)
         {
-            foreach (var (key, cts) in _running.ToList())
-                if (_held.TryGetValue(key, out var b) && b is MacroBinding or TextBinding || !_held.ContainsKey(key))
-                {
-                    cts.Cancel();
-                    _running.Remove(key);
-                }
-            foreach (var cts in _toggled.Values)
-                cts.Cancel();
+            foreach (var (key, runs) in _running.ToList())
+            {
+                if (_held.TryGetValue(key, out var binding) && binding is not (MacroBinding or TextBinding))
+                    continue;
+                cancelled.AddRange(runs);
+                _running.Remove(key);
+            }
+            cancelled.AddRange(_toggled.Values);
             _toggled.Clear();
         }
+        CancelRuns(cancelled);
     }
 
     void Press(ushort code, Binding binding, IInputSink output)
@@ -322,14 +325,7 @@ public sealed class RemapEngine
         }
         if (binding.Playback == MacroPlayback.Toggle)
         {
-            if (_toggled.Remove(binding.MacroId, out var running))
-            {
-                running.Cancel();
-                return;
-            }
-            var cts = new CancellationTokenSource();
-            _toggled[binding.MacroId] = cts;
-            Launch(_macros.PlayAsync(macro, binding.Playback, binding.Times, cts.Token));
+            ToggleMacro(binding, macro);
             return;
         }
         // Pressing the key of a macro that is still playing starts nothing new.
@@ -337,6 +333,32 @@ public sealed class RemapEngine
             if (_running.ContainsKey(code))
                 return;
         Run(code, ct => _macros.PlayAsync(macro, binding.Playback, binding.Times, ct));
+    }
+
+    void ToggleMacro(MacroBinding binding, Macro macro)
+    {
+        var id = binding.MacroId;
+        Playback? running;
+        Playback playback;
+        lock (_running)
+        {
+            if (_toggled.Remove(id, out running))
+                playback = running;
+            else
+                _toggled.Add(id, playback = new Playback());
+        }
+        if (running != null)
+        {
+            running.Cancel();
+            return;
+        }
+
+        Launch(RunPlaybackAsync(playback, ct => _macros.PlayAsync(macro, binding.Playback, binding.Times, ct), () =>
+        {
+            lock (_running)
+                if (_toggled.GetValueOrDefault(id) == playback)
+                    _toggled.Remove(id);
+        }));
     }
 
     void StartTurbo(ushort code, int rate, Action<IInputSink> tap)
@@ -363,31 +385,82 @@ public sealed class RemapEngine
         });
     }
 
-    /// <summary>Runs a task that belongs to a held key: releasing the key (or <see cref="Reset"/>) cancels it.
-    /// A task that ends on its own clears its slot.</summary>
+    /// <summary>Tracks each task started by a key. Text and sequence actions may overlap across presses,
+    /// and each remains cancellable until it completes.</summary>
     void Run(ushort code, Func<CancellationToken, Task> work)
     {
-        var cts = new CancellationTokenSource();
+        var playback = new Playback();
         lock (_running)
-            _running[code] = cts;
-        Launch(Task.Run(async () =>
         {
-            try { await work(cts.Token).ConfigureAwait(false); }
-            finally
-            {
-                lock (_running)
-                    if (_running.TryGetValue(code, out var current) && current == cts)
-                        _running.Remove(code);
-            }
-        }));
+            if (!_running.TryGetValue(code, out var runs))
+                _running.Add(code, runs = []);
+            runs.Add(playback);
+        }
+        Launch(Task.Run(() => RunPlaybackAsync(playback, work, () =>
+        {
+            lock (_running)
+                if (_running.TryGetValue(code, out var runs) && runs.Remove(playback) && runs.Count == 0)
+                    _running.Remove(code);
+        })));
+    }
+
+    static async Task RunPlaybackAsync(Playback playback, Func<CancellationToken, Task> work, Action unregister)
+    {
+        try { await work(playback.Token).ConfigureAwait(false); }
+        finally
+        {
+            unregister();
+            await playback.CompleteAsync().ConfigureAwait(false);
+        }
     }
 
     void Stop(ushort code)
     {
-        CancellationTokenSource? cts;
+        HashSet<Playback>? runs;
         lock (_running)
-            _running.Remove(code, out cts);
-        cts?.Cancel();
+            _running.Remove(code, out runs);
+        if (runs != null)
+            CancelRuns(runs);
+    }
+
+    static void CancelRuns(IEnumerable<Playback> runs)
+    {
+        foreach (var playback in runs)
+            playback.Cancel();
+    }
+
+    sealed class Playback
+    {
+        readonly CancellationTokenSource _source = new();
+        readonly Lock _gate = new();
+        Task? _cancellation;
+        bool _finished;
+
+        public CancellationToken Token => _source.Token;
+
+        public void Cancel()
+        {
+            // CancelAsync sets the cancellation flag immediately. Callbacks can run off the input thread.
+            lock (_gate)
+                if (!_finished)
+                    _cancellation ??= _source.CancelAsync();
+        }
+
+        public async ValueTask CompleteAsync()
+        {
+            Task? cancellation;
+            lock (_gate)
+            {
+                _finished = true;
+                cancellation = _cancellation;
+            }
+            try
+            {
+                if (cancellation != null)
+                    await cancellation.ConfigureAwait(false);
+            }
+            finally { _source.Dispose(); }
+        }
     }
 
     void Launch(Task task)

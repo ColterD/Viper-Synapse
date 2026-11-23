@@ -14,10 +14,9 @@ public sealed class AppearanceTests
     [Fact]
     public Task Changing_the_accent_updates_an_already_open_view() => HeadlessApp.Session.Dispatch<bool>(async () =>
     {
-        var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
         var writes = new List<AppPreferences>();
         var firstWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var model = new SettingsViewModel(main, new AppPreferences(), false)
+        var model = new SettingsViewModel(new AppPreferences(), false)
         {
             SelectedPage = "GENERAL",
             WritePreferences = async preferences =>
@@ -55,7 +54,7 @@ public sealed class AppearanceTests
             Assert.Equal(new[] { "blue", "teal" }, writes.Select(preferences => preferences.Accent));
             var saved = JsonSerializer.Deserialize(
                 JsonSerializer.Serialize(writes[^1], PreferencesJson.Default.AppPreferences), PreferencesJson.Default.AppPreferences)!;
-            Assert.Equal("teal", new SettingsViewModel(main, saved, false).SelectedAccent?.Id);
+            Assert.Equal("teal", new SettingsViewModel(saved, false).SelectedAccent?.Id);
             Assert.Equal(Color.Parse("#5CDBC5"), Assert.IsAssignableFrom<ISolidColorBrush>(heading.Foreground).Color);
             return true;
         }
@@ -77,7 +76,7 @@ public sealed class AppearanceTests
     }
 
     [Fact]
-    public Task Dashboard_replaces_setup_guidance_when_a_device_appears() => HeadlessApp.Session.Dispatch(() =>
+    public Task Dashboard_replaces_setup_guidance_when_a_device_appears() => HeadlessApp.Session.Dispatch<bool>(async () =>
     {
         var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
         var dashboard = new HomeView { DataContext = main.Home };
@@ -85,6 +84,7 @@ public sealed class AppearanceTests
         window.Show();
         try
         {
+            await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([]));
             var hint = Assert.IsType<Border>(dashboard.FindControl<Border>("DeviceSetupHint"));
             Assert.True(hint.IsEffectivelyVisible);
             var info = new DeviceInfo("00e3", "00e4", "Basilisk", "mouse", "bluetooth:123456123456",
@@ -95,6 +95,7 @@ public sealed class AppearanceTests
             main.Home.Devices.Clear();
             Dispatcher.UIThread.RunJobs();
             Assert.True(hint.IsEffectivelyVisible);
+            return true;
         }
         finally
         {

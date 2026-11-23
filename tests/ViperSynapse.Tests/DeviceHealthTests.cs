@@ -60,11 +60,13 @@ public sealed class DeviceHealthTests
             window.Show();
             try
             {
-                T Find<T>(string name) where T : Control => Assert.IsType<T>(view.FindControl<T>(name));
+                var health = Assert.IsType<DeviceHealthView>(view.FindControl<DeviceHealthView>("HealthPage"));
+                T Find<T>(string name) where T : Control => Assert.IsType<T>(health.FindControl<T>(name));
                 var page = Find<ScrollViewer>("DeviceHealthPanel");
-                Assert.False(page.IsEffectivelyVisible);
+                Dispatcher.UIThread.RunJobs();
+                Assert.False(health.IsEffectivelyVisible);
                 int requestsBeforeHealth = firmware.Requests.Count;
-                Find<ListBox>("DevicePages").SelectedItem = "HEALTH";
+                view.FindControl<ListBox>("DevicePages")!.SelectedItem = "HEALTH";
                 Dispatcher.UIThread.RunJobs();
                 Assert.True(page.IsEffectivelyVisible);
                 Assert.Equal(requestsBeforeHealth, firmware.Requests.Count);
@@ -78,7 +80,13 @@ public sealed class DeviceHealthTests
                     var row = Assert.Single(features.GetVisualDescendants().OfType<Grid>(), grid =>
                         grid.Children.OfType<TextBlock>().Any(text => text.Name == "HealthFeatureName" && text.Text == name));
                     var cells = row.Children.OfType<TextBlock>().ToList();
-                    return (Assert.Single(cells, text => text.Name == "HealthFeatureStatus").Text!,
+                    var status = Assert.Single(cells, text => text.Name == "HealthFeatureStatus");
+                    Assert.Contains("deviceStatusText", status.Classes);
+                    if (status.Text is "Available")
+                        Assert.Contains("statusGood", status.Classes);
+                    else if (status.Text is "Unavailable")
+                        Assert.Contains("statusUnavailable", status.Classes);
+                    return (status.Text!,
                         Assert.Single(cells, text => text.Name == "HealthFeatureReason").Text!,
                         Assert.Single(cells, text => text.Name == "HealthFeatureVerification").Text!);
                 }
@@ -158,7 +166,7 @@ public sealed class DeviceHealthTests
                 chooser.SelectedIndex = 1;
                 Dispatcher.UIThread.RunJobs();
                 Assert.Equal("RADIO02", model.Info.Serial);
-                Assert.Equal("HyperSpeed", view.FindControl<TextBlock>("HealthConnection")!.Text);
+                Assert.Equal("HyperSpeed", view.FindControl<DeviceHealthView>("HealthPage")!.FindControl<TextBlock>("HealthConnection")!.Text);
                 model.SetAttachedUnits(units.AsEnumerable().Reverse().ToArray());
                 Dispatcher.UIThread.RunJobs();
                 Assert.Contains("RADIO02", Assert.IsType<DeviceUnitChoice>(chooser.SelectedItem).Label);
@@ -178,7 +186,7 @@ public sealed class DeviceHealthTests
                 Dispatcher.UIThread.RunJobs();
                 Assert.Equal("WIRED01", model.Info.Serial);
                 Assert.Contains("WIRED01", Assert.IsType<DeviceUnitChoice>(chooser.SelectedItem).Label);
-                Assert.Equal("Wired USB", view.FindControl<TextBlock>("HealthConnection")!.Text);
+                Assert.Equal("Wired USB", view.FindControl<DeviceHealthView>("HealthPage")!.FindControl<TextBlock>("HealthConnection")!.Text);
             }
             finally
             {

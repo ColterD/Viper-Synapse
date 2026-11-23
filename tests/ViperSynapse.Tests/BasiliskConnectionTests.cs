@@ -146,14 +146,17 @@ public sealed class BasiliskConnectionTests : IDisposable
         using var manager = new DeviceManager(new SettingsStore(_root), new EventSink());
         var cable = Node("usb-cable", Wired);
         byte slot = 1;
-        Refresh(manager, [cable], [], _ => new ReplyDevice("mouse-a", () => slot));
+        var firmware = new ReplyDevice("mouse-a", () => slot);
+        Refresh(manager, [cable], [], _ => firmware);
         Assert.Equal((byte)1, Assert.Single(manager.Devices).OnboardProfile);
+        int slotReads = firmware.SlotReads;
 
         int updates = 0;
         manager.DevicesChanged += () => updates++;
         slot = 2;
         Refresh(manager, [cable], [], _ => throw new InvalidOperationException("The same USB endpoint should stay open"));
         Assert.Equal((byte)2, Assert.Single(manager.Devices).OnboardProfile);
+        Assert.Equal(slotReads + 1, firmware.SlotReads);
         Assert.Equal(1, updates);
     }
 
@@ -174,7 +177,13 @@ public sealed class BasiliskConnectionTests : IDisposable
     {
         RazerReport? _request;
         public string Path => "fixture";
-        public void SendFeature(ReadOnlySpan<byte> report) => _request = RazerReport.Parse(report[1..]);
+        public int SlotReads { get; private set; }
+        public void SendFeature(ReadOnlySpan<byte> report)
+        {
+            _request = RazerReport.Parse(report[1..]);
+            if ((_request.CommandClass, _request.CommandId) == (0x05, 0x84))
+                SlotReads++;
+        }
         public int ReceiveFeature(Span<byte> report)
         {
             var request = _request!;

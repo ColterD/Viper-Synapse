@@ -1,0 +1,124 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViperSynapse.App.ViewModels"
+             xmlns:views="using:ViperSynapse.App.Views"
+             xmlns:controls="using:ViperSynapse.App.Controls"
+             xmlns:devices="using:ViperSynapse.Core.Devices"
+             x:Class="ViperSynapse.App.Views.DeviceLightingView"
+             x:DataType="vm:DeviceViewModel">
+    <ScrollViewer>
+        <StackPanel Classes="devicePage" DataContext="{Binding Lighting}" x:DataType="vm:LightingViewModel">
+            <TextBlock Name="DevicePageTitle" Classes="devicePageTitle" Text="Lighting" />
+            <Grid ColumnDefinitions="2*,3*" ColumnSpacing="16">
+                <StackPanel Spacing="16">
+                    <Border Classes="devicePanel">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <TextBlock Classes="deviceSectionTitle" Text="Brightness" VerticalAlignment="Center" />
+                                <ToggleSwitch Grid.Column="1" Classes="deviceStatusToggle" IsChecked="{Binding LightingOn}" MinWidth="0"
+                                              OnContent="On" OffContent="Off" AutomationProperties.Name="Lighting" />
+                            </Grid>
+                            <controls:ValueSlider Value="{Binding Brightness}" Minimum="0" Maximum="100"
+                                                  IsEnabled="{Binding LightingOn}" IsVisible="{Binding ShowBrightness}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="devicePanel">
+                        <StackPanel Spacing="12">
+                            <TextBlock Classes="deviceSectionTitle" Text="Switch off lighting" />
+                            <CheckBox Content="When display is turned off" IsChecked="{Binding OffWhenDisplayOff}" />
+                            <CheckBox Content="When idle for (minutes)" IsChecked="{Binding OffWhenIdle}" />
+                            <controls:ValueSlider Value="{Binding IdleMinutes}" Minimum="1" Maximum="15" IsEnabled="{Binding OffWhenIdle}" Margin="26,0,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <Border Grid.Column="1" Classes="devicePanel" VerticalAlignment="Top">
+                    <StackPanel Spacing="12">
+                        <TextBlock Classes="deviceSectionTitle" Text="Effects" />
+                        <ListBox Name="FrameEffectTabs" Classes="segmentList" ItemsSource="{x:Static vm:LightingViewModel.EffectTabs}" SelectedItem="{Binding EffectTab, Mode=TwoWay}"
+                                 IsVisible="{Binding HasFrame}" HorizontalAlignment="Left">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                        </ListBox>
+                        <TextBlock Classes="deviceDetail" TextWrapping="Wrap" IsVisible="{Binding ShowQuick}"
+                                   Text="Quick effects are presets that are saved to the device's profile and can be applied to your other Razer devices." />
+                        <StackPanel Spacing="8" IsVisible="{Binding HasZones}">
+                            <CheckBox Content="Same effect on every zone" IsChecked="{Binding SyncAll}"
+                                      IsVisible="{Binding ShowZoneSync}" />
+                            <TextBlock Classes="deviceLabel" Text="Zone" />
+                            <ComboBox ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone}" HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String"><TextBlock Text="{Binding Converter={x:Static views:Converters.ZoneLabel}}" /></DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </StackPanel>
+                        <WrapPanel IsVisible="{Binding ShowQuick}">
+                            <ComboBox ItemsSource="{Binding QuickEffects}" SelectedItem="{Binding SelectedEffect}" Width="200"
+                                      Margin="0,0,8,0" AutomationProperties.Name="Quick effect" />
+                            <Button Classes="link" Content="Apply to other devices" Command="{Binding ApplyToOtherDevicesCommand}" VerticalAlignment="Center" />
+                        </WrapPanel>
+                        <TextBlock Classes="deviceDetail" TextWrapping="Wrap" Text="{Binding EffectHint}"
+                                   IsVisible="{Binding EffectHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <ComboBox ItemsSource="{Binding ColorModes}" SelectedItem="{Binding ColorModeChoice}" HorizontalAlignment="Stretch" IsVisible="{Binding ShowModes}" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <ColorPicker Color="{Binding Color1}" IsVisible="{Binding ShowColor1}" />
+                            <ColorPicker Color="{Binding Color2}" IsVisible="{Binding ShowColor2}" />
+                        </StackPanel>
+                        <StackPanel Spacing="4" IsVisible="{Binding ShowSpeed}">
+                            <TextBlock Classes="deviceLabel" Text="Speed" />
+                            <Slider Minimum="1" Maximum="3" IsSnapToTickEnabled="True" TickFrequency="1" Value="{Binding Speed}" />
+                        </StackPanel>
+                        <CheckBox Content="Reverse direction" IsChecked="{Binding Reverse}" IsVisible="{Binding ShowDirection}" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+            <Border Classes="devicePanel" IsVisible="{Binding ShowFrameEditor}">
+                <StackPanel Spacing="12">
+                    <TextBlock Classes="deviceSectionTitle" Text="Per-key colours" IsVisible="{Binding !IsMouseLighting}" />
+                    <TextBlock Classes="deviceSectionTitle" Text="Per-LED colours" IsVisible="{Binding IsMouseLighting}" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <ColorPicker Color="{Binding PaintColor}" AutomationProperties.Name="Paint colour" />
+                        <Button Classes="cancel" Content="Fill all" Command="{Binding FillAllCommand}" />
+                        <Button Classes="cancel" Content="All off" Command="{Binding AllOffCommand}" />
+                    </StackPanel>
+                    <StackPanel Spacing="6" IsVisible="{Binding ShowKeyCanvas}">
+                        <TextBlock Classes="deviceLabel" Text="Paint individual keys" />
+                        <ItemsControl Name="PaintKeyList" ItemsSource="{Binding PaintableKeys}"
+                                      AutomationProperties.Name="Keys available to paint">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="devices:DeviceKey">
+                                    <Button Click="PaintKey" Margin="0,0,8,8"
+                                            AutomationProperties.Name="{Binding Label, StringFormat='Paint {0}'}">
+                                        <TextBlock><Run Text="{Binding Number}" /><Run Text=" · " /><Run Text="{Binding Label}" /></TextBlock>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                    <controls:DeviceDrawing Name="PaintCanvas" Height="460" IsVisible="{Binding ShowKeyCanvas}"
+                                            Device="{Binding $parent[views:DeviceLightingView].((vm:DeviceViewModel)DataContext)}"
+                                            PaintColors="{Binding KeyColors}" />
+                    <ScrollViewer IsVisible="{Binding ShowLedGrid}" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                        <ItemsControl Name="LedPaintGrid" ItemsSource="{Binding Cells}" HorizontalAlignment="Left">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><UniformGrid Columns="{Binding GridColumns}" /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LedCell">
+                                    <Button Width="{Binding Width}" MinWidth="0" Height="44" Margin="2" Padding="0"
+                                            Background="{Binding Brush}" Foreground="{Binding LabelBrush}" CornerRadius="4"
+                                            FontSize="10" Content="{Binding Label}" HorizontalContentAlignment="Center"
+                                            BorderBrush="{StaticResource LineBrush}" BorderThickness="1" Click="PaintCell"
+                                            AutomationProperties.Name="{Binding AccessibleName}" ToolTip.Tip="{Binding AccessibleName}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

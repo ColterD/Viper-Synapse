@@ -1,7 +1,8 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="using:ViperSynapse.App.Services"
              x:Class="ViperSynapse.App.App"
-             Name="Viper Synapse"
+             Name="{x:Static services:AppBranding.Name}"
              RequestedThemeVariant="Dark">
 
     <Application.Resources>

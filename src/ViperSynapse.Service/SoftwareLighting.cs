@@ -24,9 +24,18 @@ public sealed class SoftwareLighting(RazerTransport transport, byte transactionI
     readonly ConcurrentQueue<ushort> _presses = new();
     readonly Lock _gate = new();
     Thread? _thread;
-    volatile bool _stopping;
+    CancellationTokenSource? _stop;
     volatile bool _paused;
-    IReadOnlyList<Group> _groups = [];
+    string? _problem;
+
+    internal string? Problem => Volatile.Read(ref _problem);
+    internal event Action? ProblemChanged;
+
+    void SetProblem(string? problem)
+    {
+        if (Interlocked.Exchange(ref _problem, problem) != problem)
+            ProblemChanged?.Invoke();
+    }
 
     /// <summary>The CPU temperature for the Temperature effect.</summary>
     static readonly CpuTemperature Temperature = new();
@@ -69,9 +78,9 @@ public sealed class SoftwareLighting(RazerTransport transport, byte transactionI
         }
         lock (_gate)
         {
-            _groups = groups;
-            _stopping = false;
-            _thread = new Thread(Run) { IsBackground = true, Name = "lighting " + transport.Path };
+            _stop = new CancellationTokenSource();
+            var cancellation = _stop.Token;
+            _thread = new Thread(() => Run(groups, cancellation)) { IsBackground = true, Name = "lighting " + transport.Path };
             _thread.Start();
         }
     }
@@ -80,14 +89,19 @@ public sealed class SoftwareLighting(RazerTransport transport, byte transactionI
     public void Stop()
     {
         Thread? thread;
+        CancellationTokenSource? stop;
         lock (_gate)
         {
             thread = _thread;
             _thread = null;
-            _stopping = true;
+            stop = _stop;
+            _stop = null;
+            stop?.Cancel();
         }
         thread?.Join();
+        stop?.Dispose();
         _presses.Clear();
+        SetProblem(null);
     }
 
     /// <summary>A key went down (its source code, as the remap engine knows it). Any thread.</summary>
@@ -97,15 +111,15 @@ public sealed class SoftwareLighting(RazerTransport transport, byte transactionI
             _presses.Enqueue(source);
     }
 
-    void Run()
+    void Run(IReadOnlyList<Group> groups, CancellationToken cancellation)
     {
-        var groups = _groups;
         bool frame = groups.Any(g => g.Frame);
         var period = TimeSpan.FromSeconds(frame ? 1 / 30.0 : 1 / 20.0);
         var clock = Stopwatch.StartNew();
         var last = clock.Elapsed;
         bool switched = false;
-        while (!_stopping)
+        int retryMilliseconds = 100;
+        while (!cancellation.IsCancellationRequested)
         {
             var now = clock.Elapsed;
             double dt = (now - last).TotalSeconds;
@@ -120,17 +134,22 @@ public sealed class SoftwareLighting(RazerTransport transport, byte transactionI
                 try
                 {
                     foreach (var group in groups)
-                        Send(group, ref switched);
+                        Send(group, ref switched, cancellation);
+                    retryMilliseconds = 100;
+                    SetProblem(null);
                 }
-                catch (IOException)
+                catch (IOException e)
                 {
-                    // Unplugged: the device manager disposes this control when it notices.
-                    return;
+                    SetProblem("Live lighting was interrupted. Retrying: " + e.Message);
+                    switched = false;
+                    cancellation.WaitHandle.WaitOne(retryMilliseconds);
+                    retryMilliseconds = Math.Min(2_000, retryMilliseconds * 2);
+                    continue;
                 }
             }
             var wait = period - (clock.Elapsed - now);
             if (wait > TimeSpan.Zero)
-                Thread.Sleep(wait);
+                cancellation.WaitHandle.WaitOne(wait);
         }
     }
 
@@ -147,24 +166,34 @@ public sealed class SoftwareLighting(RazerTransport transport, byte transactionI
                 group.Animation.Press(row * model.MatrixColumns + column);
     }
 
-    void Send(Group group, ref bool switched)
+    void Send(Group group, ref bool switched, CancellationToken cancellation)
     {
         var colors = group.Animation.Colors;
         if (group.Frame)
         {
             int columns = model!.MatrixColumns;
-            // A busy answer drops a row for one frame; the next frame sends it again.
             for (int r = 0; r < model.MatrixRows; r++)
-                transport.Send(DeviceCommands.CustomFrameRow(transactionId, r, 0, columns - 1, colors.Skip(r * columns).Take(columns).ToList()));
+                SendReport(DeviceCommands.CustomFrameRow(transactionId, r, 0, columns - 1,
+                    colors.Skip(r * columns).Take(columns).ToList()), cancellation);
             if (!switched)
             {
-                transport.Send(DeviceCommands.CustomFrameEffect(transactionId));
+                SendReport(DeviceCommands.CustomFrameEffect(transactionId), cancellation);
                 switched = true;
             }
             return;
         }
         for (int i = 0; i < group.Leds.Count; i++)
-            transport.Send(DeviceCommands.Effect(transactionId, group.Leds[i], new ZoneEffect(EffectKind.Static, colors[i], default), DeviceCommands.NoStore));
+            SendReport(DeviceCommands.Effect(transactionId, group.Leds[i], new ZoneEffect(EffectKind.Static, colors[i], default),
+                DeviceCommands.NoStore), cancellation);
+    }
+
+    void SendReport(RazerReport request, CancellationToken cancellation)
+    {
+        if (cancellation.IsCancellationRequested)
+            return;
+        var reply = transport.Send(request);
+        if (!RazerProbe.Accepts(request, reply, strict: model?.Has("onboard_profiles") == true))
+            throw new IOException($"The device did not acknowledge the lighting frame ({reply.Status}).");
     }
 
     public void Dispose() => Stop();

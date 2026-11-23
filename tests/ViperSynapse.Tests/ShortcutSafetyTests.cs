@@ -18,7 +18,7 @@ public class ShortcutSafetyTests
             null, null, null, [], false, null, [30, 48, 46], "available");
         var device = new DeviceViewModel(info, main);
         main.Tabs.Add(device);
-        main.Home.SelectedPage = "GLOBAL SHORTCUTS";
+        main.Home.ShowShortcutsCommand.Execute(null);
         var shortcuts = main.Home.Shortcuts;
         var original = GlobalShortcut.Create([30, 48, 46], new KeyboardBinding(15));
         shortcuts.ChangeCommand.Execute(new ShortcutRow(original, "", "", ""));

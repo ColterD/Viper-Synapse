@@ -14,14 +14,14 @@ static class OnboardCommands
     const string Usage = """
         viper-cli onboard buttons
         viper-cli onboard [--serial SERIAL] list
-        viper-cli onboard [--serial SERIAL] create SLOT
-        viper-cli onboard [--serial SERIAL] select SLOT
-        viper-cli onboard [--serial SERIAL] delete SLOT --confirm
-        viper-cli onboard [--serial SERIAL] rename SLOT NAME
+        viper-cli onboard --serial SERIAL create SLOT
+        viper-cli onboard --serial SERIAL select SLOT
+        viper-cli onboard --serial SERIAL delete SLOT --confirm
+        viper-cli onboard --serial SERIAL rename SLOT NAME
         viper-cli onboard [--serial SERIAL] read SLOT BUTTON LAYER
-        viper-cli onboard [--serial SERIAL] key SLOT BUTTON LAYER USAGE [MODIFIERS]
-        viper-cli onboard [--serial SERIAL] disable SLOT BUTTON LAYER
-        viper-cli onboard [--serial SERIAL] restore SLOT BUTTON
+        viper-cli onboard --serial SERIAL key SLOT BUTTON LAYER USAGE [MODIFIERS]
+        viper-cli onboard --serial SERIAL disable SLOT BUTTON LAYER
+        viper-cli onboard --serial SERIAL restore SLOT BUTTON
 
         SLOT is 1–5. BUTTON, USB keyboard USAGE (04–73) and modifier mask are hex bytes.
         LAYER is normal or hypershift. Restore resets the normal layer to its documented factory binding.
@@ -81,7 +81,8 @@ static class OnboardCommands
             request = new(OnboardOperation.List, Serial: serial);
             return true;
         }
-        if (args.Length < 2 || !byte.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out byte slot)
+        if (args.Length < 2 || (serial == null && args[0] != "read") ||
+            !byte.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out byte slot)
             || slot is < 1 or > 5)
             return false;
 

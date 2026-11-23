@@ -1,17 +1,17 @@
-<p align="center"><img src="assets/banner.png" alt="Viper Synapse"></p>
+<p align="center"><img src="assets/icon-128.png" alt="Viper Relay"></p>
 
-# Viper Synapse
+# Viper Relay
 
 This is [ColterD’s fork](https://github.com/ColterD/Viper-Synapse) of
 [Viper Synapse by codingncaffeine](https://github.com/codingncaffeine/Viper-Synapse).
-Work in this fork focuses on documenting device coverage, validating changes against real hardware
-where possible, and improving the build and review checks.
+Viper Relay is the working name of the fork. The previously published v0.0.8 binaries display the former name in the app window.
+The executable and package are still named `viper-synapse`.
 
 A Razer Synapse–style control centre for Razer keyboards, keypads and mice on Linux: key and button
 remapping, Hypershift, macros, lighting, sensitivity stages, polling rate and power settings, in a window
 that feels like the one you know.
 
-Viper Synapse talks to devices directly over hidraw using Razer's control protocol, so it needs no kernel
+Viper Relay talks to devices directly over hidraw using Razer's control protocol, so it needs no kernel
 module and no other daemon. Remaps and macros run in user space through evdev and uinput, so they work the
 same on Wayland and X11.
 
@@ -34,7 +34,7 @@ same on Wayland and X11.
   optional start countdown; edit the action list (keystrokes, delays, text, commands, reorder); play once,
   a set number of times, while held, or toggle on and off.
 - **Lighting** — brightness and quick effects per zone: static, breathing, spectrum cycling, wave,
-  reactive, starlight, wheel, and effects Viper Synapse draws itself on any device, Synapse's Fire and
+  reactive, starlight, wheel, and effects Viper Relay draws itself on any device, Synapse's Fire and
   Ripple and iCUE-style Color Shift, Color Pulse, Color Wave, Visor, Rain, Watercolor, Marquee,
   Sequential, Strobing, Gradient, Heartbeat and Temperature (follows the CPU); per-key colours on keypads.
 - **Performance** — up to five sensitivity stages with optional separate X and Y, and the polling rate.
@@ -89,7 +89,7 @@ For Basilisk V4 Pro firmware slots and buttons, see [onboard CLI usage](docs/bas
 
 ### Profile exchange
 
-With the Viper Synapse service running, export or import a local profile archive using its
+With the Viper Relay service running, export or import a local profile archive using its
 four-digit settings key (`00e3` for Basilisk V4 Pro):
 
 ```sh
@@ -108,7 +108,7 @@ add `--allow-launch`. Refresh the app to reload its macro list after a CLI impor
 The [OpenRazer](https://openrazer.github.io/) project documented the Razer control protocol that this work
 builds on, and its device data seeds the catalogue.
 
-Viper Synapse is an independent project. It is not affiliated with or endorsed by Razer Inc. "Razer" and
+Viper Relay is an independent project. It is not affiliated with or endorsed by Razer Inc. "Razer" and
 "Synapse" are trademarks of Razer Inc. Device photos are fetched from Razer's own servers at run time and
 are not part of this repository.
 

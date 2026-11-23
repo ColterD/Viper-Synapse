@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -30,7 +31,8 @@ public sealed record DeviceInfo(
     string? InputControlsStatus = null,
     string? Connection = null,
     byte? OnboardProfile = null, bool NativeMacroKeys = false,
-    string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null);
+    string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null,
+    bool? VirtualOutputReady = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]
@@ -51,9 +53,14 @@ public sealed class DeviceManager : IDisposable
     static readonly HashSet<ushort> Verified = [0x02EB, 0x008D, 0x00E3];
 
     readonly SettingsStore _store;
-    readonly IInputSink _output;
+    IInputSink? _output;
+    readonly Func<IInputSink>? _createOutput;
+    IDisposable? _ownedOutput;
+    string? _outputIssue;
     readonly Lock _gate = new();
     readonly Lock _profileGate = new();
+    readonly Lock _shortcutGate = new();
+    readonly ConcurrentDictionary<string, Lock> _applyGates = new(StringComparer.Ordinal);
     readonly Lock _refreshGate = new();
     readonly Dictionary<string, Connected> _devices = [];
     readonly Dictionary<string, byte> _basiliskSlots = new(StringComparer.Ordinal);
@@ -70,6 +77,8 @@ public sealed class DeviceManager : IDisposable
     internal Func<HidrawNode, NagaReportNode?> FindNativeNagaNode { get; init; } = node => NagaChromaButtons.FindReportNode(node);
     internal Func<NagaReportNode, Action<ushort, int>, Action<Exception>, IHidrawButtonReader> OpenNativeNagaButtons { get; init; } =
         NagaChromaButtons.Open;
+    internal Func<IReadOnlyList<string>, Action<double, double>, IDisposable?> OpenStickMonitor { get; init; } = OpenAnalogStick;
+    internal int StickWatchMilliseconds { get; init; } = 15_000;
 
     public event Action? DevicesChanged;
     public event Action<string>? SettingsChanged;
@@ -84,13 +93,66 @@ public sealed class DeviceManager : IDisposable
     readonly bool _includeTestDevices;
 
     public DeviceManager(SettingsStore store, IInputSink output, bool includeTestDevices = false)
+        : this(store, includeTestDevices) => _output = ShareModifiers(output);
+
+    internal DeviceManager(SettingsStore store, Func<IInputSink> createOutput)
+        : this(store, includeTestDevices: false)
+    {
+        _createOutput = createOutput;
+        RetryInputOutput();
+    }
+
+    DeviceManager(SettingsStore store, bool includeTestDevices)
     {
         _includeTestDevices = includeTestDevices;
         _store = store;
-        // Every device session writes to the same virtual keyboard, so their modifier owners must share state.
-        _output = output is SharedModifierSink ? output : new SharedModifierSink(output);
         _macros = store.LoadMacros();
         _shortcuts = store.LoadShortcuts();
+    }
+
+    // Sessions write to the same virtual keyboard and share modifier ownership.
+    static IInputSink ShareModifiers(IInputSink output) => output is SharedModifierSink ? output : new SharedModifierSink(output);
+
+    internal bool RetryInputOutput()
+    {
+        lock (_refreshGate)
+        {
+            lock (_gate)
+            {
+                if (_disposed)
+                    return false;
+                if (_output != null)
+                    return true;
+            }
+
+            IInputSink output;
+            try
+            {
+                output = _createOutput!();
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                const string help = "Virtual input (/dev/uinput) is unavailable. Load the uinput module and check the Viper udev rule.";
+                lock (_gate)
+                    _outputIssue = help + " " + e.Message;
+                Console.Error.WriteLine(_outputIssue);
+                return false;
+            }
+
+            string[] keys;
+            lock (_gate)
+            {
+                _ownedOutput = output as IDisposable;
+                _output = ShareModifiers(output);
+                _outputIssue = null;
+                keys = _devices.Values.Where(d => !d.Suppressed).Select(d => d.Key).Distinct().ToArray();
+            }
+            foreach (var key in keys)
+                Apply(key);
+            if (keys.Length > 0)
+                DevicesChanged?.Invoke();
+            return true;
+        }
     }
 
     sealed class Connected(string port, ushort productId, string name)
@@ -112,6 +174,8 @@ public sealed class DeviceManager : IDisposable
             ? ProductId == DeviceCatalogue.BasiliskV4ProWired ? "wired" : "hyperspeed"
             : null;
         public string? ControlNode { get; set; }
+        public HidrawNode? ControlCandidate { get; set; }
+        public long NextControlProbe { get; set; }
         public DeviceIdentity? Identity { get; set; }
         public string? StableSerial { get; set; }
         public byte? OnboardProfile { get; set; }
@@ -158,11 +222,10 @@ public sealed class DeviceManager : IDisposable
         public DeviceSession? Session { get => Volatile.Read(ref _session); set => Volatile.Write(ref _session, value); }
         public DeviceControl? Control { get; set; }
         public KeypadButtons? Buttons { get; set; }
+        public HidrawNode? ButtonsCandidate { get; set; }
         public bool ButtonsStarting { get; set; }
         public ThumbstickMode SessionStick { get; set; }
-        public StickMonitor? Monitor { get; set; }
-        public DateTime StickWatchedUntil { get; set; }
-        public long StickLastSent { get; set; }
+        public StickWatch StickWatch { get; } = new();
         public string? Problem { get; set; }
         public string? ControlProblem { get; set; }
         public string? InputProblem { get; set; }
@@ -173,7 +236,7 @@ public sealed class DeviceManager : IDisposable
         {
             get
             {
-                var problems = new[] { Problem, ControlProblem, ButtonsProblem, InputProblem, CleanupProblem }
+                var problems = new[] { Problem, ControlProblem, Control?.SoftwareLightingProblem, ButtonsProblem, InputProblem, CleanupProblem }
                     .Where(p => p != null).ToArray();
                 return problems.Length == 0 ? null : string.Join(" ", problems);
             }
@@ -193,7 +256,7 @@ public sealed class DeviceManager : IDisposable
 
     public string DevicesJson() => System.Text.Json.JsonSerializer.Serialize(Devices.ToList(), DeviceInfoJson.Default.ListDeviceInfo);
 
-    static DeviceInfo Describe(Connected d) => new(
+    DeviceInfo Describe(Connected d) => new(
         d.Key,
         d.ProductKey,
         d.Model?.Name ?? d.Name,
@@ -206,7 +269,11 @@ public sealed class DeviceManager : IDisposable
         d.ControlNode,
         d.InputNodes,
         d.Session != null,
-        d.Problems,
+        (d.Problems, _outputIssue) switch
+        {
+            ({ } problems, { } outputIssue) => problems + " " + outputIssue,
+            var (problems, outputIssue) => problems ?? outputIssue,
+        },
         d.InputControls,
         d.InputControlsStatus,
         d.Connection,
@@ -214,39 +281,68 @@ public sealed class DeviceManager : IDisposable
         d.CanReadNativeMacros,
         d.Bus switch { HidrawNode.UsbBus => "usb", HidrawNode.BluetoothBus => "bluetooth", _ => null },
         d.Control != null,
-        d.Problem,
-        d.InputProblem);
-
-    internal bool HasBasiliskUsbEndpoints
-    {
-        get { lock (_gate) return _devices.Values.Any(d => d.IsBasiliskUsb); }
-    }
+        d.Control?.SoftwareLightingProblem ?? d.Problem,
+        _outputIssue ?? d.InputProblem,
+        _output != null);
 
     /// <summary>Looks at what is plugged in now: starts new devices, drops the ones that went away.</summary>
-    public void Refresh()
+    public void Refresh() => Refresh(forceControlRetry: false);
+
+    internal void Refresh(bool forceControlRetry)
     {
         lock (_refreshGate)
         {
             if (!_disposed)
                 RefreshCore(HidrawNode.Enumerate(), InputNode.Enumerate(), node => RazerProbe.HasControlReport(node),
-                    path => new RazerTransport(HidrawDevice.Open(path)), InputControlDiscovery.Read);
+                    OpenControl, InputControlDiscovery.Read, forceControlRetry);
         }
     }
 
     internal void Refresh(IEnumerable<HidrawNode> hidraw, IEnumerable<InputNode> inputs,
         Func<HidrawNode, bool> hasControlReport, Func<string, RazerTransport> open,
-        Func<IEnumerable<string>, DiscoveredControls>? readControls = null)
+        Func<IEnumerable<string>, DiscoveredControls>? readControls = null, bool forceControlRetry = false)
     {
         lock (_refreshGate)
         {
             if (!_disposed)
-                RefreshCore(hidraw, inputs, hasControlReport, open, readControls ?? InputControlDiscovery.Read);
+                RefreshCore(hidraw, inputs, hasControlReport, open, readControls ?? InputControlDiscovery.Read, forceControlRetry);
+        }
+    }
+
+    static RazerTransport OpenControl(string path) => new(HidrawDevice.Open(path));
+
+    internal void RefreshReceivers() =>
+        RefreshReceivers(() => HidrawNode.Enumerate(), node => RazerProbe.HasControlReport(node), OpenControl);
+
+    internal void RefreshReceivers(Func<IReadOnlyList<HidrawNode>> enumerate,
+        Func<HidrawNode, bool> hasControlReport, Func<string, RazerTransport> open)
+    {
+        lock (_refreshGate)
+        {
+            if (_disposed)
+                return;
+            Connected[] receivers;
+            lock (_gate)
+                receivers = _devices.Values.Where(d => d.IsBasiliskUsb &&
+                    d.ProductId == DeviceCatalogue.BasiliskV4ProReceiver && !d.Suppressed).ToArray();
+            if (receivers.Length == 0)
+                return;
+            var nodes = enumerate();
+            bool changed = false;
+            foreach (var receiver in receivers)
+                changed |= ReconcileControl(receiver, nodes, hasControlReport, open, [], forceRetry: false);
+            if (!changed)
+                return;
+            lock (_gate)
+                SelectBasiliskEndpoints();
+            Apply(BasiliskSettingsKey, refreshing: true);
+            DevicesChanged?.Invoke();
         }
     }
 
     void RefreshCore(IEnumerable<HidrawNode> rawNodes, IEnumerable<InputNode> inputNodes,
         Func<HidrawNode, bool> hasControlReport, Func<string, RazerTransport> open,
-        Func<IEnumerable<string>, DiscoveredControls> readControls)
+        Func<IEnumerable<string>, DiscoveredControls> readControls, bool forceControlRetry)
     {
         var hidraw = rawNodes.Where(n => n.VendorId == RazerVendor && n.PortPath.Length > 0 && Real(n.PortPath)).ToList();
         // Virtual devices (ours included) have no physical port; only real hardware is a device.
@@ -270,16 +366,17 @@ public sealed class DeviceManager : IDisposable
                 .Where(reports => reports.Count() == 1).OrderBy(reports => reports.Key).Select(reports => reports.Single()).ToArray());
 
         bool changed = false;
-        List<Connected> added = [];
+        HashSet<string> affectedModels = [];
         lock (_gate)
         {
             foreach (var gone in _devices.Keys.Where(port => !ports.TryGetValue(port, out var found) ||
                 found.ProductId != _devices[port].ProductId || found.Bus != _devices[port].Bus).ToList())
             {
+                affectedModels.Add(_devices[gone].Key);
                 StopSession(_devices[gone]);
                 _devices[gone].Control?.Dispose();
                 _devices[gone].Buttons?.Dispose();
-                _devices[gone].Monitor?.Dispose();
+                _devices[gone].StickWatch.Dispose();
                 _devices.Remove(gone);
                 changed = true;
             }
@@ -289,7 +386,7 @@ public sealed class DeviceManager : IDisposable
                 {
                     device = new Connected(port, productId, name) { Bus = bus };
                     _devices[port] = device;
-                    added.Add(device);
+                    affectedModels.Add(device.Key);
                     changed = true;
                 }
                 var nodes = inputs.Where(n => n.PortPath == port &&
@@ -303,12 +400,15 @@ public sealed class DeviceManager : IDisposable
                 if (!nodes.SequenceEqual(device.InputNodes) || device.NativeMacroPath != macroPath ||
                     !nagaReports.SequenceEqual(device.NativeNagaNodes))
                 {
+                    if (!nodes.SequenceEqual(device.InputNodes))
+                        device.StickWatch.RetireReader();
                     device.InputNodes = nodes;
                     device.NativeMacroPath = macroPath;
                     device.NativeNagaNodes = nagaReports;
                     // The device's nodes changed under a running session (a re-plug): start it again.
                     StopSession(device);
                     device.InputFailed = false;
+                    affectedModels.Add(device.Key);
                     changed = true;
                 }
             }
@@ -334,6 +434,7 @@ public sealed class DeviceManager : IDisposable
                         device.InputFailed = false;
                     device.EvdevControls = found.Controls;
                     device.InputControlsStatus = found.Status;
+                    affectedModels.Add(device.Key);
                     changed = true;
                 }
             }
@@ -343,59 +444,99 @@ public sealed class DeviceManager : IDisposable
         // Probing talks to the hardware; keep it out of the lock.
         List<Connected> probes;
         lock (_gate)
-            probes = _devices.Values.Where(d => !d.BluetoothBasiliskId && (d.IsBasiliskUsb || added.Contains(d) ||
-                d.NativeMacroPath != null)).ToList();
+            probes = _devices.Values.Where(d => !d.BluetoothBasiliskId).ToList();
         foreach (var device in probes)
         {
-            var control = hidraw.FirstOrDefault(n => n.PortPath == device.Port &&
-                (device.ProductId != LegacyRemapControls.BlackWidowChromaV2 || n.ProductId == device.ProductId && n.Bus == device.Bus) &&
-                (!device.IsBasiliskUsb || n.ProductId == device.ProductId && n.Bus == device.Bus && n.Interface == 3) &&
-                hasControlReport(n));
-            if (device.IsBasiliskUsb && device.ControlTransport is { } transport &&
-                control?.DevicePath == device.ControlNode && StillResponding(transport, device.Identity!))
-                continue;
-            if (device.IsBasiliskUsb && control == null && device.ControlNode == null)
-                continue;
-            if (device.NativeMacroPath != null && device.Control != null && control?.DevicePath == device.ControlNode)
-                continue;
-            if (device.NativeMacroPath != null && control == null && device.ControlNode == null)
-                continue;
-
-            DeviceControl? retired;
-            lock (_gate)
+            if (ReconcileControl(device, hidraw, hasControlReport, open, adopt, forceControlRetry))
             {
-                if (device.NativeMacroPath != null && device.ControlNode != control?.DevicePath)
-                {
-                    StopSession(device);
-                    device.InputFailed = false;
-                }
-                retired = device.Control;
-                device.Control = null;
-                device.ControlTransport = null;
+                affectedModels.Add(device.Key);
+                changed = true;
             }
-            retired?.Dispose();
-            changed |= ProbeControl(device, control?.DevicePath, open, adopt);
         }
 
         lock (_gate)
-            changed |= SelectBasiliskEndpoints();
+        {
+            if (SelectBasiliskEndpoints())
+            {
+                affectedModels.Add(BasiliskSettingsKey);
+                changed = true;
+            }
+        }
 
-        foreach (var device in added.Where(d => d.Model?.Has("keypad_buttons") == true))
-            StartButtons(device, hidraw.FirstOrDefault(n => n.PortPath == device.Port && n.Interface == 1));
+        foreach (var device in probes.Where(d => d.Model?.Has("keypad_buttons") == true))
+            changed |= ReconcileButtons(device, hidraw.FirstOrDefault(n => n.PortPath == device.Port && n.ProductId == device.ProductId &&
+                n.Bus == device.Bus && n.Interface == 1), forceControlRetry);
         foreach (var (key, keymap) in adopt)
             FollowDeviceKeymap(key, keymap);
 
-        List<string> keys;
-        lock (_gate)
-            keys = _devices.Values.Where(d => !d.Suppressed).Select(d => d.Key).Distinct().ToList();
-        foreach (var key in keys)
+        foreach (var key in affectedModels)
             Apply(key, refreshing: true);
+        if (!affectedModels.Contains(BasiliskSettingsKey))
+        {
+            // Device-side slot selection can change without a new endpoint. An explicit or
+            // udev refresh observes it without replaying settings across healthy units.
+            foreach (var device in probes.Where(d => d.IsBasiliskUsb && !d.Suppressed))
+                changed |= ObserveOnboardSlot(device);
+        }
         if (changed)
             DevicesChanged?.Invoke();
     }
 
-    bool ProbeControl(Connected device, string? path, Func<string, RazerTransport> open, List<(string Key, int Keymap)> adopt)
+    bool ObserveOnboardSlot(Connected device)
     {
+        if (device.Control is not { } control)
+            return false;
+        byte? slot = control.ObserveOnboardProfile();
+        lock (_gate)
+        {
+            if (device.Control != control || device.OnboardProfile == slot)
+                return false;
+            device.OnboardProfile = slot;
+            if (slot is byte active && device.StableSerial is { } serial)
+                _basiliskSlots[serial] = active;
+            return true;
+        }
+    }
+
+    bool ReconcileControl(Connected device, IEnumerable<HidrawNode> nodes, Func<HidrawNode, bool> hasControlReport,
+        Func<string, RazerTransport> open, List<(string Key, int Keymap)> adopt, bool forceRetry)
+    {
+        var candidate = nodes.FirstOrDefault(n => n.PortPath == device.Port && n.ProductId == device.ProductId &&
+            n.Bus == device.Bus && (!device.IsBasiliskUsb || n.Interface == 3) && hasControlReport(n));
+        bool replaced = candidate != device.ControlCandidate;
+        if (!replaced)
+        {
+            if (candidate == null)
+                return false;
+            if (device.ControlTransport is { } transport)
+            {
+                if (!device.IsBasiliskUsb || StillResponding(transport, device.Identity!))
+                    return false;
+            }
+            else if (!forceRetry && !device.IsBasiliskUsb && Environment.TickCount64 < device.NextControlProbe)
+                return false;
+        }
+
+        DeviceControl? retired;
+        lock (_gate)
+        {
+            if (device.NativeMacroPath != null && replaced)
+            {
+                StopSession(device);
+                device.InputFailed = false;
+            }
+            retired = device.Control;
+            device.Control = null;
+            device.ControlTransport = null;
+        }
+        retired?.Dispose();
+        return ProbeControl(device, candidate, open, adopt, replaced);
+    }
+
+    bool ProbeControl(Connected device, HidrawNode? candidate, Func<string, RazerTransport> open,
+        List<(string Key, int Keymap)> adopt, bool replaced)
+    {
+        var path = candidate?.DevicePath;
         RazerTransport? transport = null;
         DeviceIdentity? identity = null;
         DeviceControl? control = null;
@@ -414,6 +555,17 @@ public sealed class DeviceManager : IDisposable
                     lock (_gate)
                         previousSlot = device.IsBasiliskUsb && _basiliskSlots.TryGetValue(identity.Serial, out byte slot) ? slot : null;
                     control = new DeviceControl(transport, identity.TransactionId, device.Model, previousSlot);
+                    var endpoint = control;
+                    control.SoftwareLightingProblemChanged += () => ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        lock (_gate)
+                        {
+                            if (!_devices.TryGetValue(device.Port, out var current) || current != device ||
+                                !ReferenceEquals(device.Control, endpoint) || device.Suppressed)
+                                return;
+                        }
+                        DevicesChanged?.Invoke();
+                    });
                 }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -429,12 +581,14 @@ public sealed class DeviceManager : IDisposable
             adopt.Add((device.Key, keymap));
         lock (_gate)
         {
-            bool changed = device.ControlNode != path || device.Identity != identity || device.Problem != problem ||
+            bool changed = replaced || device.Identity != identity || device.Problem != problem ||
                 device.ControlProblem != null || device.OnboardProfile != null;
             // Keep an already-proven pair associated when a node stops responding. A new serial or
             // a replaced node invalidates that match.
-            if (identity != null || device.ControlNode != path)
+            if (identity != null || replaced)
                 device.StableSerial = identity?.Serial;
+            device.ControlCandidate = candidate;
+            device.NextControlProbe = Environment.TickCount64 + 2_000;
             device.ControlNode = path;
             device.Identity = identity;
             device.Control = control;
@@ -548,7 +702,8 @@ public sealed class DeviceManager : IDisposable
     }
 
     internal OnboardResult ManageOnboard(OnboardRequest request) =>
-        WithOnboardDevice(request.Serial, (control, serial) =>
+        WithOnboardDevice(request.Operation is OnboardOperation.List or OnboardOperation.ReadBinding
+            ? request.Serial : RequireOnboardSerial(request.Serial), (control, serial) =>
         {
             var result = control.ManageOnboard(serial, request);
             bool namesChanged = request.Operation is OnboardOperation.Rename or OnboardOperation.Delete or OnboardOperation.Create;
@@ -560,17 +715,17 @@ public sealed class DeviceManager : IDisposable
     {
         if (request.Backup != null)
             throw new InvalidDataException("A backup request must not include an archive.");
-        return WithOnboardDevice(RequireArchiveSerial(request.Serial), (control, serial) => control.BackupOnboard(serial, request.Slot));
+        return WithOnboardDevice(RequireOnboardSerial(request.Serial), (control, serial) => control.BackupOnboard(serial, request.Slot));
     }
 
     internal OnboardRestoreResult RestoreOnboard(OnboardArchiveRequest request)
     {
         var backup = request.Backup ?? throw new InvalidDataException("Select a valid onboard backup to restore.");
-        return WithOnboardDevice(RequireArchiveSerial(request.Serial),
+        return WithOnboardDevice(RequireOnboardSerial(request.Serial),
             (control, serial) => control.RestoreOnboard(serial, request.Slot, backup));
     }
 
-    static string RequireArchiveSerial(string? serial) =>
+    static string RequireOnboardSerial(string? serial) =>
         serial is { } known && ValidOnboardSerial(known) ? known : throw new InvalidDataException("Select a mouse by serial.");
 
     T WithOnboardDevice<T>(string? requestedSerial, Func<DeviceControl, string, T> execute)
@@ -627,34 +782,49 @@ public sealed class DeviceManager : IDisposable
     static bool ValidOnboardSerial(string serial) =>
         !string.IsNullOrWhiteSpace(serial) && serial.Length <= 22 && !serial.Any(char.IsControl);
 
-    public void SetSettings(string key, DeviceSettings settings)
+    public void SetSettings(string key, DeviceSettings settings) => CommitSettings(key, null, settings);
+
+    internal SettingsSnapshot SettingsSnapshot(string key) => _store.DeviceSnapshot(key);
+
+    internal SettingsCommitResult CommitSettings(string key, string? revision, DeviceSettings settings)
     {
-        _store.SaveDevice(key, settings);
-        ApplySettingsChange(key);
+        lock (ApplyGate(key))
+        {
+            var saved = _store.CommitDevice(key, revision, settings);
+            return saved.Saved ? saved with { Units = ApplySettingsChange(key) } : saved;
+        }
     }
 
     void UpdateSettings(string key, Func<DeviceSettings, DeviceSettings> update)
     {
-        if (_store.UpdateDevice(key, update))
-            ApplySettingsChange(key);
+        lock (ApplyGate(key))
+            if (_store.UpdateDevice(key, update))
+                ApplySettingsChange(key);
     }
 
-    void ApplySettingsChange(string key)
+    IReadOnlyList<UnitApplyOutcome> ApplySettingsChange(string key)
     {
-        Apply(key);
+        var outcomes = Apply(key, refreshing: false);
         SettingsChanged?.Invoke(key);
+        return outcomes;
     }
 
     // Input threads hold the session lock while reading these replaced snapshots. Do not
     // take _gate here: session changes hold _gate while waiting for that same session lock.
     public MacroLibrary Macros => Volatile.Read(ref _macros);
 
-    public void SetMacros(MacroLibrary macros)
+    public void SetMacros(MacroLibrary macros) => CommitMacros(null, macros);
+
+    internal SettingsSnapshot MacrosSnapshot() => _store.MacrosSnapshot();
+
+    internal SettingsCommitResult CommitMacros(string? revision, MacroLibrary macros)
     {
         lock (_profileGate)
         {
-            _store.SaveMacros(macros);
-            Volatile.Write(ref _macros, macros);
+            var saved = _store.CommitMacros(revision, macros);
+            if (saved.Saved)
+                Volatile.Write(ref _macros, macros);
+            return saved;
         }
     }
 
@@ -669,46 +839,52 @@ public sealed class DeviceManager : IDisposable
 
     internal void ImportProfile(string key, PortableProfile archive, bool replace, bool allowLaunch)
     {
-        lock (_profileGate)
-            Volatile.Write(ref _macros, _store.ImportProfile(key, archive, replace, allowLaunch));
-        ApplySettingsChange(key);
+        lock (ApplyGate(key))
+        {
+            lock (_profileGate)
+                Volatile.Write(ref _macros, _store.ImportProfile(key, archive, replace, allowLaunch));
+            ApplySettingsChange(key);
+        }
     }
 
     public ShortcutList Shortcuts => Volatile.Read(ref _shortcuts);
 
     /// <summary>New shortcuts can mean a device must now be grabbed (or need not be any more): every model is
     /// applied again.</summary>
-    public void SetShortcuts(ShortcutList shortcuts)
+    public void SetShortcuts(ShortcutList shortcuts) => CommitShortcuts(null, shortcuts);
+
+    internal SettingsSnapshot ShortcutsSnapshot() => _store.ShortcutsSnapshot();
+
+    internal SettingsCommitResult CommitShortcuts(string? revision, ShortcutList shortcuts)
     {
-        _store.SaveShortcuts(shortcuts);
+        SettingsCommitResult saved;
+        lock (_shortcutGate)
+        {
+            saved = _store.CommitShortcuts(revision, shortcuts);
+            if (!saved.Saved)
+                return saved;
+            Volatile.Write(ref _shortcuts, shortcuts);
+        }
         List<string> keys;
         lock (_gate)
-        {
-            Volatile.Write(ref _shortcuts, shortcuts);
             keys = _devices.Values.Select(d => d.Key).Distinct().ToList();
-        }
         foreach (var key in keys)
             Apply(key);
+        return saved;
     }
 
     /// <summary>Brings every connected device of a model in line with its stored settings.</summary>
     public void Apply(string key) => Apply(key, refreshing: false);
 
-    void Apply(string key, bool refreshing)
+    Lock ApplyGate(string key) => key == BasiliskSettingsKey ? _refreshGate : _applyGates.GetOrAdd(key, static _ => new());
+
+    IReadOnlyList<UnitApplyOutcome> Apply(string key, bool refreshing)
     {
-        if (key != BasiliskSettingsKey)
-        {
-            ApplyCore(key, refreshing);
-            return;
-        }
-        lock (_refreshGate)
-        {
-            if (!_disposed)
-                ApplyCore(key, refreshing);
-        }
+        lock (ApplyGate(key))
+            return _disposed ? [] : ApplyCore(key, refreshing);
     }
 
-    void ApplyCore(string key, bool refreshing)
+    IReadOnlyList<UnitApplyOutcome> ApplyCore(string key, bool refreshing)
     {
         var settings = _store.LoadDevice(key);
         var keymap = settings.ActiveKeymapOrFirst;
@@ -717,8 +893,11 @@ public sealed class DeviceManager : IDisposable
         bool changed = false;
         lock (_gate)
         {
+            var output = _output;
             foreach (var device in _devices.Values.Where(d => d.Key == key && !d.Suppressed))
             {
+                if (output == null)
+                    continue;
                 // A failed reader must not be grabbed again on unrelated filesystem scans. Explicit
                 // settings changes, changed nodes or recovered permissions permit another attempt.
                 if (refreshing && device.InputFailed)
@@ -794,7 +973,7 @@ public sealed class DeviceManager : IDisposable
                     continue;
                 }
                 var model = device.Model;
-                device.Engine = new RemapEngine(_output, new Host(this, key))
+                device.Engine = new RemapEngine(output, new Host(this, key))
                 {
                     Keymap = keymap,
                     Defaults = source => DefaultFor(model, source),
@@ -819,10 +998,7 @@ public sealed class DeviceManager : IDisposable
                     device.Session.KeyPressed += source => watched.Control?.Press(source);
                     // The session now holds the stick; an analog-mode monitor would read nothing.
                     if (stick != ThumbstickMode.Analog)
-                    {
-                        device.Monitor?.Dispose();
-                        device.Monitor = null;
-                    }
+                        device.StickWatch.RetireReader();
                     device.SessionStick = stick;
                     if (IsInputSessionProblem(device.InputProblem))
                         device.InputProblem = null;
@@ -838,34 +1014,66 @@ public sealed class DeviceManager : IDisposable
             }
         }
         // Lighting, sensitivity and power talk to the hardware: outside the lock.
-        List<(Connected Device, DeviceControl Control)> controls;
+        List<(Connected Device, DeviceControl? Control, string? Serial)> controls;
         lock (_gate)
-            controls = _devices.Values.Where(d => d.Key == key && !d.Suppressed && d.Control != null)
-                .Select(d => (d, d.Control!)).ToList();
-        foreach (var (device, control) in controls)
+            controls = _devices.Values.Where(d => d.Key == key && !d.Suppressed)
+                .Select(d => (d, d.Control, d.Identity?.Serial)).ToList();
+        var outcomes = new List<UnitApplyOutcome>(controls.Count);
+        foreach (var (device, control, serial) in controls)
         {
-            control.Apply(settings.Active, settings.ActiveKeymap, refreshing);
-            string? problem = control.LastProblem;
-            if (device.IsBasiliskUsb)
+            if (control == null)
             {
-                byte? onboardProfile = control.OnboardProfile;
-                lock (_gate)
-                {
-                    if (device.Control != control ||
-                        device.ControlProblem == problem && device.OnboardProfile == onboardProfile)
-                        continue;
-                    device.ControlProblem = problem;
-                    device.OnboardProfile = onboardProfile;
-                    if (onboardProfile is byte slot && device.StableSerial is { } serial)
-                        _basiliskSlots[serial] = slot;
-                    changed = true;
-                }
+                outcomes.Add(new(device.Port, device.ProductKey, serial, UnitApplyStatus.Unavailable,
+                    device.Problem ?? "Firmware control is unavailable on this connection."));
+                continue;
             }
-            if (problem != null)
-                Console.Error.WriteLine($"{key}: {problem}");
+            var outcome = control.ApplyWithResult(device.Port, device.ProductKey, serial, settings.Active, settings.ActiveKeymap, refreshing);
+            changed |= PublishApplyOutcome(device, control, outcome);
+            outcomes.Add(outcome);
         }
         if (changed)
             DevicesChanged?.Invoke();
+        return outcomes;
+    }
+
+    bool PublishApplyOutcome(Connected device, DeviceControl control, UnitApplyOutcome outcome)
+    {
+        if (outcome.Detail != null)
+            Console.Error.WriteLine($"{device.Key}: {outcome.Detail}");
+        var slot = device.IsBasiliskUsb ? control.OnboardProfile : null;
+        lock (_gate)
+        {
+            if (device.Control != control || device.ControlProblem == outcome.Detail && device.OnboardProfile == slot)
+                return false;
+            device.ControlProblem = outcome.Detail;
+            device.OnboardProfile = slot;
+            if (slot is byte active && device.StableSerial is { } serial)
+                _basiliskSlots[serial] = active;
+            return true;
+        }
+    }
+
+    internal UnitApplyOutcome RetryUnitApply(string key, string port, string productId, string serial)
+    {
+        lock (_refreshGate)
+        lock (ApplyGate(key))
+        {
+            Connected? device;
+            lock (_gate)
+                device = _devices.GetValueOrDefault(port);
+            if (_disposed || device == null || device.Suppressed || device.Key != key || device.ProductKey != productId ||
+                device.Identity?.Serial != serial)
+                return new(port, productId, serial, UnitApplyStatus.Disconnected, "The original device is no longer connected.");
+            if (device.Control is not { } control || device.ControlTransport is not { } transport)
+                return new(port, productId, serial, UnitApplyStatus.Unavailable, "Firmware control is unavailable.");
+            if (string.IsNullOrWhiteSpace(serial) || !StillResponding(transport, device.Identity!))
+                return new(port, productId, serial, UnitApplyStatus.Unavailable, "The original device's identity could not be verified.");
+            var settings = _store.LoadDevice(key);
+            var outcome = control.ApplyWithResult(port, productId, serial, settings.Active, settings.ActiveKeymap, refreshing: false);
+            if (PublishApplyOutcome(device, control, outcome))
+                DevicesChanged?.Invoke();
+            return outcome;
+        }
     }
 
     void StartNativeMacroSession(Connected device)
@@ -984,6 +1192,25 @@ public sealed class DeviceManager : IDisposable
     /// the profile to that keymap.</summary>
     void StartButtons(Connected device, HidrawNode? node) => StartButtonsUsing(device, node, KeypadButtons.Start);
 
+    bool ReconcileButtons(Connected device, HidrawNode? candidate, bool forceRetry)
+    {
+        KeypadButtons? retired;
+        lock (_gate)
+        {
+            if (device.ButtonsStarting || device.ButtonsCandidate == candidate &&
+                (!forceRetry || candidate == null || device.Buttons != null))
+                return false;
+            device.ButtonsCandidate = candidate;
+            retired = device.Buttons;
+            device.Buttons = null;
+            device.ButtonsProblem = null;
+        }
+        retired?.Dispose();
+        device.SetPhysicalHypershift(false);
+        StartButtons(device, candidate);
+        return true;
+    }
+
     void StartButtonsUsing(Connected device, HidrawNode? node,
         Func<string, Action<bool>, Action<int>, Action<KeypadButtons>, KeypadButtons> start)
     {
@@ -1041,7 +1268,8 @@ public sealed class DeviceManager : IDisposable
             {
                 if (!listenerPublished)
                     device.ButtonsStarting = false;
-                if (e is IOException && _devices.TryGetValue(device.Port, out var current) && current == device)
+                if ((e is IOException or UnauthorizedAccessException) &&
+                    _devices.TryGetValue(device.Port, out var current) && current == device)
                 {
                     device.ButtonsProblem = "Cannot listen to the keypad's buttons: " + e.Message;
                     notify = true;
@@ -1052,7 +1280,7 @@ public sealed class DeviceManager : IDisposable
                 try { buttons.Dispose(); }
                 catch (Exception cleanup) { e.Data["KeypadButtonsCleanupFailure"] = cleanup; }
             }
-            if (e is not IOException)
+            if (e is not (IOException or UnauthorizedAccessException))
                 throw;
             Console.Error.WriteLine($"{device.Key}: cannot listen to the keypad's buttons: {e.Message}");
             if (notify)
@@ -1062,12 +1290,18 @@ public sealed class DeviceManager : IDisposable
 
     void HandleKeymapReport(Connected device, KeypadButtons buttons, int keymap)
     {
-        lock (_gate)
+        lock (ApplyGate(device.Key))
         {
-            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Buttons != buttons)
-                return;
-            device.Control?.KeymapChangedOnDevice(keymap - 1);
-            FollowDeviceKeymap(device.Key, keymap - 1);
+            bool changed;
+            lock (_gate)
+            {
+                if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Buttons != buttons)
+                    return;
+                device.Control?.KeymapChangedOnDevice(keymap - 1);
+                changed = _store.UpdateDevice(device.Key, settings => AdoptKeymap(settings, keymap - 1));
+            }
+            if (changed)
+                ApplySettingsChange(device.Key);
         }
     }
 
@@ -1102,28 +1336,42 @@ public sealed class DeviceManager : IDisposable
     /// analog mode the gamepad node is read without taking it; in 4-way and 8-way mode the session reports it.</summary>
     public void WatchStick(string key)
     {
-        List<Connected> devices;
+        List<(Connected Device, IReadOnlyList<string> Paths, long Generation)> readers = [];
         lock (_gate)
-            devices = _devices.Values.Where(d => d.Key == key && d.Model?.Has("thumbstick") == true).ToList();
-        foreach (var device in devices)
         {
-            device.StickWatchedUntil = DateTime.UtcNow.AddSeconds(15);
-            if (device.Monitor != null || device.Session != null && device.SessionStick != ThumbstickMode.Analog)
-                continue;
-            var node = device.InputNodes.FirstOrDefault(IsGamepad);
-            if (node == null)
-                continue;
+            foreach (var device in _devices.Values.Where(d => d.Key == key && d.Model?.Has("thumbstick") == true))
+            {
+                bool needReader = device.InputNodes.Count > 0 && (device.Session == null || device.SessionStick == ThumbstickMode.Analog);
+                if (device.StickWatch.Renew(StickWatchMilliseconds, needReader) is long generation)
+                    readers.Add((device, device.InputNodes, generation));
+            }
+        }
+        foreach (var (device, paths, generation) in readers)
+        {
+            IDisposable? monitor = null;
             try
             {
-                var monitor = StickMonitor.Start(node);
-                monitor.Moved += (x, y) => SendStick(device, x, y);
-                device.Monitor = monitor;
+                monitor = OpenStickMonitor(paths, (x, y) => SendStick(device, x, y, generation));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 Console.Error.WriteLine($"{key}: cannot follow the thumbstick: {e.Message}");
             }
+            finally
+            {
+                device.StickWatch.Complete(generation, monitor);
+            }
         }
+    }
+
+    static IDisposable? OpenAnalogStick(IReadOnlyList<string> paths, Action<double, double> moved)
+    {
+        var node = paths.FirstOrDefault(IsGamepad);
+        if (node == null)
+            return null;
+        var monitor = StickMonitor.Start(node);
+        monitor.Moved += moved;
+        return monitor;
     }
 
     static bool IsGamepad(string path)
@@ -1139,23 +1387,10 @@ public sealed class DeviceManager : IDisposable
         }
     }
 
-    void SendStick(Connected device, double x, double y)
+    void SendStick(Connected device, double x, double y, long? readerGeneration = null)
     {
-        if (DateTime.UtcNow > device.StickWatchedUntil)
-        {
-            // Nobody is looking any more: an analog-mode monitor goes away (off its own thread).
-            if (device.Monitor is { } idle)
-            {
-                device.Monitor = null;
-                ThreadPool.QueueUserWorkItem(_ => idle.Dispose());
-            }
-            return;
-        }
-        long now = Environment.TickCount64;
-        if (now - device.StickLastSent < 33)
-            return;
-        device.StickLastSent = now;
-        StickMoved?.Invoke(device.Key, x, y);
+        if (device.StickWatch.ShouldReport(readerGeneration))
+            StickMoved?.Invoke(device.Key, x, y);
     }
 
     /// <summary>The screen went off or on, or the idle time moved: each device whose profile asks for it goes dark or
@@ -1185,7 +1420,9 @@ public sealed class DeviceManager : IDisposable
 
     /// <summary>The keypad moved to another keymap (its keymap button, or what it was on when it was plugged in): the
     /// profile follows, gaining empty keymaps up to that one if it has fewer.</summary>
-    void FollowDeviceKeymap(string key, int keymap) => UpdateSettings(key, settings =>
+    void FollowDeviceKeymap(string key, int keymap) => UpdateSettings(key, settings => AdoptKeymap(settings, keymap));
+
+    static DeviceSettings AdoptKeymap(DeviceSettings settings, int keymap)
     {
         if (settings.ActiveKeymap == keymap && settings.Active.Keymaps.Count > keymap)
             return settings;
@@ -1199,7 +1436,7 @@ public sealed class DeviceManager : IDisposable
             Profiles = settings.Profiles.Select(p => p.Id == profile.Id ? profile : p).ToList(),
             ActiveKeymap = keymap,
         };
-    });
+    }
 
     // Per device model: the profile the user chose, while a linked program's profile stands in for it.
     readonly Lock _focusGate = new();
@@ -1285,10 +1522,11 @@ public sealed class DeviceManager : IDisposable
                 StopSession(device);
                 device.Control?.Dispose();
                 device.Buttons?.Dispose();
-                device.Monitor?.Dispose();
+                device.StickWatch.Dispose();
             }
             _devices.Clear();
         }
         _pad.Dispose();
+        _ownedOutput?.Dispose();
     }
 }

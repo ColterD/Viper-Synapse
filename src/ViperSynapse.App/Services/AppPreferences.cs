@@ -24,20 +24,26 @@ public sealed record AppPreferences(bool CloseToTray = true, bool StartMinimized
         }
     }
 
-    public Task SaveAsync() => Task.Run(() =>
+    public Task SaveAsync() => Task.Run(() => WriteAtomic(FilePath, JsonSerializer.Serialize(this, PreferencesJson.Default.AppPreferences)));
+
+    internal static void WriteAtomic(string path, string contents)
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var temp = FilePath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(this, PreferencesJson.Default.AppPreferences));
-            File.Move(temp, FilePath, overwrite: true);
+            File.WriteAllText(temp, contents);
+            File.Move(temp, path, overwrite: true);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        finally
         {
-            Console.Error.WriteLine($"Could not save preferences: {e.Message}");
+            if (File.Exists(temp))
+            {
+                try { File.Delete(temp); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
         }
-    });
+    }
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
@@ -86,12 +92,11 @@ public static class Autostart
             File.Delete(EntryPath);
             return;
         }
-        Directory.CreateDirectory(Path.GetDirectoryName(EntryPath)!);
         var program = Program();
-        File.WriteAllText(EntryPath, $"""
+        AppPreferences.WriteAtomic(EntryPath, $"""
             [Desktop Entry]
             Type=Application
-            Name=Viper Synapse
+            Name={AppBranding.Name}
             Comment=Razer device settings, key bindings and macros
             Exec={(program.Contains(' ') ? $"\"{program}\"" : program)}{(minimized ? " --background" : "")}
             Icon=viper-synapse

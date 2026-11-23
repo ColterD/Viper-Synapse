@@ -10,7 +10,7 @@ static class Program
     {
         if (args.Any(a => a is "--version" or "-V"))
         {
-            Console.WriteLine($"Viper Synapse {typeof(Program).Assembly.GetName().Version?.ToString(3)}");
+            Console.WriteLine($"{AppBranding.Name} {AppBranding.Version}");
             return 0;
         }
         if (args.Any(a => a is "--help" or "-h"))

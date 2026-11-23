@@ -1,0 +1,71 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViperSynapse.App.ViewModels"
+             xmlns:views="using:ViperSynapse.App.Views"
+             x:Class="ViperSynapse.App.Views.DeviceHealthView"
+             x:DataType="vm:DeviceViewModel">
+    <ScrollViewer Name="DeviceHealthPanel">
+        <StackPanel Classes="devicePage" DataContext="{Binding Health}" x:DataType="vm:DeviceHealth">
+            <TextBlock Name="DevicePageTitle" Classes="devicePageTitle" Text="Health and compatibility" />
+            <Border Classes="devicePanel">
+                <Grid ColumnDefinitions="2*,*,*,*" ColumnSpacing="16">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="deviceLabel" Text="Detected model" />
+                        <TextBlock Name="HealthModelName" Text="{Binding Model}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Classes="deviceLabel" Text="Connection" />
+                        <TextBlock Name="HealthConnection" Text="{Binding Connection}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="4">
+                        <TextBlock Classes="deviceLabel" Text="Firmware control" />
+                        <TextBlock Classes="deviceStatusText" Text="{Binding ControlStatus}"
+                                       Classes.statusGood="{Binding ControlStatus, Converter={x:Static views:Converters.AvailableStatus}}"
+                                       Classes.statusWarning="{Binding ControlStatus, Converter={x:Static views:Converters.WarningStatus}}"
+                                       Classes.statusUnavailable="{Binding ControlStatus, Converter={x:Static views:Converters.UnavailableStatus}}"
+                                       TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="3" Spacing="4">
+                        <TextBlock Classes="deviceLabel" Text="Linux input" />
+                        <TextBlock Classes="deviceStatusText" Text="{Binding InputStatus}"
+                                       Classes.statusGood="{Binding InputStatus, Converter={x:Static views:Converters.AvailableStatus}}"
+                                       Classes.statusWarning="{Binding InputStatus, Converter={x:Static views:Converters.WarningStatus}}"
+                                       Classes.statusUnavailable="{Binding InputStatus, Converter={x:Static views:Converters.UnavailableStatus}}"
+                                       TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+            <Border Classes="devicePanel statusNotice" IsVisible="{Binding Issue, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Classes="deviceStatusText statusWarning" Text="{Binding Issue}" TextWrapping="Wrap" />
+            </Border>
+            <Border Classes="devicePanel">
+                <StackPanel>
+                    <Grid ColumnDefinitions="190,112,*,*" ColumnSpacing="12" Margin="0,0,0,6">
+                        <TextBlock Classes="deviceLabel" Text="Feature" />
+                        <TextBlock Grid.Column="1" Classes="deviceLabel" Text="Access" />
+                        <TextBlock Grid.Column="2" Classes="deviceLabel" Text="Reason" />
+                        <TextBlock Grid.Column="3" Classes="deviceLabel" Text="Verification" />
+                    </Grid>
+                    <ItemsControl Name="HealthFeatures" ItemsSource="{Binding Features}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DeviceHealthFeature">
+                                <Grid ColumnDefinitions="190,112,*,*" ColumnSpacing="12" Margin="0,6">
+                                    <TextBlock Name="HealthFeatureName" Text="{Binding Name}" TextWrapping="Wrap" />
+                                    <TextBlock Name="HealthFeatureStatus" Grid.Column="1" Classes="deviceStatusText" Text="{Binding Status}"
+                                               Classes.statusGood="{Binding Status, Converter={x:Static views:Converters.AvailableStatus}}"
+                                               Classes.statusWarning="{Binding Status, Converter={x:Static views:Converters.WarningStatus}}"
+                                               Classes.statusUnavailable="{Binding Status, Converter={x:Static views:Converters.UnavailableStatus}}"
+                                           TextWrapping="Wrap" />
+                                    <TextBlock Name="HealthFeatureReason" Grid.Column="2" Text="{Binding Reason}"
+                                               Classes="deviceDetail" TextWrapping="Wrap" />
+                                    <TextBlock Name="HealthFeatureVerification" Grid.Column="3" Text="{Binding Verification}"
+                                               Classes="deviceDetail" TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

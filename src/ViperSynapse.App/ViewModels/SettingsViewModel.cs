@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using ViperSynapse.App.Services;
 
 namespace ViperSynapse.App.ViewModels;
@@ -7,20 +8,22 @@ namespace ViperSynapse.App.ViewModels;
 /// (appearance, language, what's new, about). Start at sign-in is off unless the user turns it on.</summary>
 public sealed partial class SettingsViewModel : TabViewModel
 {
-    readonly MainViewModel _main;
     AppPreferences _preferences;
     readonly bool _ready;
     readonly string _built;
-    Task _pendingSave = Task.CompletedTask;
+    OrderedSave<AppPreferences>? _preferenceSaves;
+    OrderedSave<(bool Enabled, bool Minimized)>? _autostartSaves;
+
+    OrderedSave<AppPreferences> PreferenceSaves => _preferenceSaves ??= new(WritePreferences, SaveStateChanged);
+    OrderedSave<(bool Enabled, bool Minimized)> AutostartSaves => _autostartSaves ??=
+        new(state => WriteAutostartAsync(state.Enabled, state.Minimized), SaveStateChanged);
 
     /// <summary>Creates the settings tab from the preferences and autostart state read at startup.</summary>
-    /// <param name="main">The window.</param>
     /// <param name="preferences">Read before the UI thread started.</param>
     /// <param name="startAtLogin">Whether the autostart entry exists, also read before the UI thread started.</param>
     /// <param name="built">When this build was made.</param>
-    public SettingsViewModel(MainViewModel main, AppPreferences preferences, bool startAtLogin, string built = "")
+    public SettingsViewModel(AppPreferences preferences, bool startAtLogin, string built = "")
     {
-        _main = main;
         _preferences = preferences;
         _built = built;
         StartAtLogin = startAtLogin;
@@ -50,7 +53,7 @@ public sealed partial class SettingsViewModel : TabViewModel
     public bool ShowSynapse => SelectedPage == "SYNAPSE";
     public bool ShowGeneral => SelectedPage == "GENERAL";
 
-    public string Version => $"Version {typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3)}" + (_built.Length > 0 ? $"  ·  built {_built}" : "");
+    public string Version => $"Running build {AppBranding.Version}" + (_built.Length > 0 ? $"  ·  built {_built}" : "");
 
     partial void OnSelectedPageChanged(string value)
     {
@@ -80,13 +83,8 @@ public sealed partial class SettingsViewModel : TabViewModel
 
     void WriteAutostart()
     {
-        if (!_ready)
-            return;
-        _ = Autostart.SetAsync(StartAtLogin, StartMinimized).ContinueWith(t =>
-        {
-            if (t.Exception != null)
-                _main.Fail("Could not change start at sign-in", t.Exception.GetBaseException());
-        }, TaskScheduler.Default);
+        if (_ready)
+            AutostartSaves.Enqueue((StartAtLogin, StartMinimized));
     }
 
     void Save(AppPreferences preferences)
@@ -94,15 +92,34 @@ public sealed partial class SettingsViewModel : TabViewModel
         if (!_ready)
             return;
         _preferences = preferences;
-        _pendingSave = SaveAfterAsync(_pendingSave, preferences);
+        PreferenceSaves.Enqueue(preferences);
     }
 
-    internal Task PendingSave => _pendingSave;
+    internal Task PendingSave => Task.WhenAll(PreferenceSaves.Pending, AutostartSaves.Pending);
+    public bool HasFailedSave => PreferenceSaves.Failure != null || AutostartSaves.Failure != null;
     internal Func<AppPreferences, Task> WritePreferences { get; init; } = preferences => preferences.SaveAsync();
+    internal Func<bool, bool, Task> WriteAutostartAsync { get; init; } = Autostart.SetAsync;
 
-    async Task SaveAfterAsync(Task previous, AppPreferences preferences)
+    public string? SaveStatus => PreferenceSaves.Failure is { } preferences ? $"Could not save app preferences. {preferences.Message}" :
+        AutostartSaves.Failure is { } autostart ? $"Could not change start at sign-in. {autostart.Message}" :
+        PreferenceSaves.Saving || AutostartSaves.Saving ? "Saving app preferences…" :
+        PreferenceSaves.Revision > 0 || AutostartSaves.Revision > 0 ? "App preferences saved." : null;
+
+    bool CanRetrySave() => HasFailedSave;
+
+    [RelayCommand(CanExecute = nameof(CanRetrySave))]
+    void RetrySave()
     {
-        await previous.ConfigureAwait(false);
-        await WritePreferences(preferences).ConfigureAwait(false);
+        if (PreferenceSaves.Failure != null)
+            PreferenceSaves.Enqueue(_preferences);
+        if (AutostartSaves.Failure != null)
+            WriteAutostart();
+    }
+
+    void SaveStateChanged()
+    {
+        OnPropertyChanged(nameof(SaveStatus));
+        OnPropertyChanged(nameof(HasFailedSave));
+        RetrySaveCommand.NotifyCanExecuteChanged();
     }
 }

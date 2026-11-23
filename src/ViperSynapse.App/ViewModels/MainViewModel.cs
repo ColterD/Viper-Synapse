@@ -4,13 +4,14 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ViperSynapse.App.Services;
 using ViperSynapse.Core.Bindings;
+using ViperSynapse.Core.Protocol;
 
 namespace ViperSynapse.App.ViewModels;
 
-/// <summary>How a tab's icon is drawn: Synapse 4 puts most in a green disc, Settings is a plain gear.</summary>
+/// <summary>The tab bar icon for each destination.</summary>
 public enum TabIcon
 {
-    Synapse,
+    Devices,
     Keypad,
     Mouse,
     Keyboard,
@@ -39,12 +40,28 @@ public abstract partial class TabViewModel : ObservableObject
 public sealed partial class MainViewModel : ObservableObject
 {
     readonly DaemonClient _client;
+    readonly SemaphoreSlim _discoveryGate = new(1, 1);
+    bool _serviceReady;
+    bool _backgroundScanRunning, _backgroundScanPending;
+    readonly Dictionary<string, (long Revision, Task Completion)> _deviceSaves = [];
     readonly List<TabViewModel> _back = [], _forward = [];
     bool _navigating;
     long _requestedDeviceSnapshot;
-    long _appliedDeviceSnapshot;
 
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
+    public IReadOnlyList<TabViewModel> PrimaryTabs { get; }
+
+    public TabViewModel? SelectedPrimaryTab
+    {
+        get => SelectedTab is DeviceViewModel ? null : SelectedTab;
+        set { if (value != null) SelectedTab = value; }
+    }
+
+    public DeviceViewModel? SelectedDeviceTab
+    {
+        get => SelectedTab as DeviceViewModel;
+        set { if (value != null) SelectedTab = value; }
+    }
 
     [ObservableProperty]
     public partial TabViewModel? SelectedTab { get; set; }
@@ -64,18 +81,86 @@ public sealed partial class MainViewModel : ObservableObject
     public MainViewModel(DaemonClient client, AppPreferences preferences, bool startAtLogin, string built = "")
     {
         _client = client;
-        Settings = new SettingsViewModel(this, preferences, startAtLogin, built);
+        ConnectServiceAsync = () => client.ConnectAsync();
+        ReadDeviceListAsync = client.GetDevicesAsync;
+        ReadDeviceSettingsAsync = client.GetSettingsAsync;
+        ReadLiveDeviceAsync = client.GetUnitStateAsync;
+        Settings = new SettingsViewModel(preferences, startAtLogin, built);
         Home = new HomeViewModel(this);
         LinkedGames = new LinkedGamesViewModel(this);
         Macros = new MacrosViewModel(client, this);
+        PrimaryTabs = [Home, LinkedGames, Macros, Settings];
         Tabs.Add(Home);
         Tabs.Add(LinkedGames);
         Tabs.Add(Macros);
         Tabs.Add(Settings);
         SelectedTab = Home;
+        _client.DevicesChanged += () => Dispatcher.UIThread.Post(() => _ = RefreshAfterDeviceChangeAsync());
+        _client.StickMoved += (key, x, y) => Dispatcher.UIThread.Post(() =>
+        {
+            foreach (var device in Devices.Where(d => d.Key == key))
+                device.StickAt(x, y);
+        });
+        _client.SettingsChanged += key => Dispatcher.UIThread.Post(() =>
+        {
+            foreach (var device in Devices.Where(d => d.Key == key))
+                _ = device.ReloadSettingsAsync(ReadDeviceSettingsAsync);
+        });
     }
 
     public DaemonClient Client => _client;
+
+    internal Func<string, DeviceSettings, Task>? WriteDeviceSettingsAsync { get; init; }
+
+    internal (long Revision, Task Completion) DeviceSaveState(string key) =>
+        _deviceSaves.GetValueOrDefault(key, (0, Task.CompletedTask));
+
+    internal Task FinishDeviceEditsAsync(TimeSpan timeout)
+    {
+        foreach (var device in Devices)
+            device.FlushPendingEdits();
+        return Task.WhenAll(_deviceSaves.Values.Select(save => save.Completion)).WaitAsync(timeout);
+    }
+
+    internal async Task<bool> FinishWorkspaceEditsAsync(TimeSpan timeout)
+    {
+        await Task.WhenAll(FinishDeviceEditsAsync(timeout), Macros.PendingSave, Home.Shortcuts.PendingSave,
+            Settings.PendingSave).WaitAsync(timeout);
+        return !Macros.HasFailedSave && !Home.Shortcuts.HasFailedSave && !Settings.HasFailedSave &&
+            !_deviceSaveFeedback.Values.Any(feedback => feedback.Error != null);
+    }
+
+    // The service stores profiles by model, even if a particular unit is unplugged or a tab is recreated.
+    internal Task<Exception?> SaveDeviceSettings(string key, DeviceSettings settings, DeviceSettings? baseline = null)
+    {
+        var previous = DeviceSaveState(key);
+        long revision = previous.Revision + 1;
+        SetSaveFeedback(key, new(revision, true, settings, baseline));
+        var pending = SaveAfterAsync(previous.Completion, key, revision, settings, baseline);
+        _deviceSaves[key] = (revision, pending);
+        return pending;
+    }
+
+    async Task<Exception?> SaveAfterAsync(Task previous, string key, long revision, DeviceSettings settings, DeviceSettings? baseline)
+    {
+        await previous.ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<UnitApplyOutcome>? units = null;
+            if (WriteDeviceSettingsAsync is { } write)
+                await write(key, settings).ConfigureAwait(false);
+            else
+                units = (await Client.CommitSettingsAsync(key, settings, baseline).ConfigureAwait(false)).Units;
+            await Dispatcher.UIThread.InvokeAsync(() => CompleteSave(key, revision, units, null));
+            return null;
+        }
+        catch (Exception e)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => CompleteSave(key, revision, null, e));
+            Fail("Could not save the device settings", e, () => GetSaveFeedback(key)?.Revision == revision);
+            return e;
+        }
+    }
 
     public MacroLibrary MacroLibrary => Macros.Library;
 
@@ -94,6 +179,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (newValue == Macros)
             Macros.KeymapsChanged();
         OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(SelectedPrimaryTab));
+        OnPropertyChanged(nameof(SelectedDeviceTab));
         OnPropertyChanged(nameof(CanGoBack));
         OnPropertyChanged(nameof(CanGoForward));
     }
@@ -123,58 +210,117 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Reads devices, settings and macros from the service again.</summary>
     [RelayCommand]
-    async Task Refresh()
+    Task Refresh()
     {
+        Problem = null;
+        return RefreshWorkspaceAsync(reloadExisting: true);
+    }
+
+    public Task StartAsync() => RefreshWorkspaceAsync(reloadExisting: false);
+
+    async Task RefreshWorkspaceAsync(bool reloadExisting)
+    {
+        if (!await RefreshDevicesAsync(() => ReadConnectedDevicesAsync(reloadExisting), reloadExisting: reloadExisting))
+            return;
         try
         {
             await Macros.LoadAsync();
-            await RefreshDevicesAsync();
-            foreach (var device in Devices.ToList())
-                await device.ReloadAsync();
-            Problem = null;
         }
         catch (Exception e)
         {
-            Fail("Could not refresh", e);
+            Fail("Could not load macros", e);
         }
     }
 
-    public async Task StartAsync()
+    internal Func<Task> ConnectServiceAsync { get; init; }
+    internal Func<Task<IReadOnlyList<DeviceInfo>>> ReadDeviceListAsync { get; init; }
+    internal Func<string, Task<DeviceSettings>> ReadDeviceSettingsAsync { get; init; }
+    internal Func<DeviceInfo, Task<DeviceState?>> ReadLiveDeviceAsync { get; init; }
+
+    async Task<IReadOnlyList<DeviceInfo>> ReadConnectedDevicesAsync(bool retryHardware = false)
     {
+        await _discoveryGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            _client.DevicesChanged += () => _ = RefreshDevicesAsync();
-            _client.StickMoved += (key, x, y) => Dispatcher.UIThread.Post(() =>
-            {
-                foreach (var device in Devices.Where(d => d.Key == key))
-                    device.StickAt(x, y);
-            });
-            _client.SettingsChanged += key => Dispatcher.UIThread.Post(() =>
-            {
-                foreach (var device in Devices.Where(d => d.Key == key))
-                    _ = device.ReloadAsync();
-            });
-            await _client.ConnectAsync().ConfigureAwait(false);
-            await Macros.LoadAsync().ConfigureAwait(false);
-            await RefreshDevicesAsync().ConfigureAwait(false);
+            if (!_serviceReady)
+                await ConnectServiceAsync().ConfigureAwait(false);
+            if (retryHardware && Client.IsConnected)
+                await Client.RetryDiscoveryAsync().ConfigureAwait(false);
+            var devices = await ReadDeviceListAsync().ConfigureAwait(false);
+            _serviceReady = true;
+            return devices;
         }
-        catch (Exception e)
+        catch
         {
-            Dispatcher.UIThread.Post(() => Problem = "Cannot reach the Viper Synapse service: " + e.Message);
+            _serviceReady = false;
+            throw;
+        }
+        finally
+        {
+            _discoveryGate.Release();
         }
     }
 
-    Task RefreshDevicesAsync() => RefreshDevicesAsync(_client.GetDevicesAsync);
+    internal async Task RefreshAfterDeviceChangeAsync()
+    {
+        if (_backgroundScanRunning)
+        {
+            _backgroundScanPending = true;
+            return;
+        }
 
-    internal async Task RefreshDevicesAsync(Func<Task<IReadOnlyList<DeviceInfo>>> readDevices)
+        _backgroundScanRunning = true;
+        try
+        {
+            do
+            {
+                _backgroundScanPending = false;
+                await RefreshDevicesAsync(() => ReadConnectedDevicesAsync(), showScanning: false);
+            }
+            while (_backgroundScanPending);
+        }
+        catch (Exception e)
+        {
+            Fail("Could not update connected devices", e);
+        }
+        finally
+        {
+            _backgroundScanRunning = false;
+        }
+    }
+
+    internal async Task<bool> RefreshDevicesAsync(Func<Task<IReadOnlyList<DeviceInfo>>> readDevices,
+        bool showScanning = true, bool reloadExisting = false)
     {
         long request = Interlocked.Increment(ref _requestedDeviceSnapshot);
-        var devices = await readDevices().ConfigureAwait(false);
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        bool IsCurrent() => request == Volatile.Read(ref _requestedDeviceSnapshot);
+
+        if (showScanning)
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (IsCurrent())
+                    Home.SetDiscoveryState(DeviceDiscoveryState.Scanning);
+            });
+
+        IReadOnlyList<DeviceInfo> devices;
+        try
         {
-            if (request < _appliedDeviceSnapshot)
-                return;
-            _appliedDeviceSnapshot = request;
+            devices = await readDevices().ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (IsCurrent())
+                    Home.SetDiscoveryState(DeviceDiscoveryState.ServiceError, e.Message);
+            });
+            return false;
+        }
+
+        var reload = await Dispatcher.UIThread.InvokeAsync<DeviceViewModel[]>(() =>
+        {
+            if (!IsCurrent())
+                return []; // The service responded, but a newer scan owns the dashboard.
 
             var current = Devices.ToList();
             // One tab per device model; a second identical device shares the tab and the settings.
@@ -184,9 +330,11 @@ public sealed partial class MainViewModel : ObservableObject
                 var tab = current.FirstOrDefault(t => t.Key == group.Key);
                 if (tab != null)
                 {
+                    var before = tab.UnitChoices;
                     bool endpointChanged = tab.SetAttachedUnits(units);
-                    tab.RefreshOnboard();
-                    if (endpointChanged)
+                    if (reloadExisting || endpointChanged || !ReferenceEquals(before, tab.UnitChoices))
+                        tab.RefreshOnboard(devices);
+                    if (endpointChanged && !reloadExisting)
                         _ = tab.ReloadAsync();
                     current.Remove(tab);
                     continue;
@@ -195,20 +343,42 @@ public sealed partial class MainViewModel : ObservableObject
                 tab.SetAttachedUnits(units);
                 // Devices sit between SYNAPSE and LINKED GAMES, as in Synapse.
                 Tabs.Insert(Tabs.IndexOf(LinkedGames), tab);
-                _ = tab.ReloadAsync();
+                if (!reloadExisting)
+                    _ = tab.ReloadAsync();
             }
             foreach (var gone in current)
             {
                 if (SelectedTab == gone)
                     SelectedTab = Home;
+                gone.Detach();
                 Tabs.Remove(gone);
+                _back.RemoveAll(tab => tab == gone);
+                _forward.RemoveAll(tab => tab == gone);
             }
-            Home.Devices.Clear();
+            if (current.Count > 0)
+            {
+                OnPropertyChanged(nameof(CanGoBack));
+                OnPropertyChanged(nameof(CanGoForward));
+            }
+            bool deviceListChanged = current.Count > 0;
+            foreach (var gone in current)
+                Home.Devices.Remove(gone);
             foreach (var tab in Devices)
+            {
+                if (Home.Devices.Contains(tab))
+                    continue;
                 Home.Devices.Add(tab);
-            Home.Shortcuts.DevicesUpdated();
+                deviceListChanged = true;
+            }
+            Home.SetDiscoveryState(DeviceDiscoveryState.Ready);
+            if (deviceListChanged)
+                Home.Shortcuts.DevicesUpdated();
             OpenRequested();
+            return reloadExisting ? Devices.ToArray() : [];
         });
+        foreach (var device in reload)
+            await device.ReloadAsync().ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>For screenshots and checks: VIPER_SYNAPSE_OPEN=02eb opens a device tab, 02eb/LIGHTING a page of it,
@@ -233,7 +403,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             SelectedTab = fixedTab;
             if (open.StartsWith("shortcuts", StringComparison.Ordinal))
-                Home.SelectedPage = "GLOBAL SHORTCUTS";
+                Home.ShowShortcutsCommand.Execute(null);
             if (open == "shortcuts:add")
                 Dispatcher.UIThread.Post(() => Home.Shortcuts.AddCommand.Execute(null), DispatcherPriority.Background);
             return;
@@ -267,43 +437,73 @@ public sealed partial class MainViewModel : ObservableObject
     public void Show(TabViewModel tab) => SelectedTab = tab;
 
     /// <summary>Reports a failed service call where the user can see it.</summary>
-    public void Fail(string what, Exception e) => Dispatcher.UIThread.Post(() => Problem = $"{what}: {e.Message}");
+    public void Fail(string what, Exception e) => Fail(what, e, null);
+
+    internal void Fail(string what, Exception e, Func<bool>? isCurrent) => Dispatcher.UIThread.Post(() =>
+    {
+        if (isCurrent is null || isCurrent())
+            Problem = $"{what}: {e.Message}";
+    });
 }
 
-/// <summary>The SYNAPSE tab: the dashboard of connected devices and modules.</summary>
+public enum DeviceDiscoveryState
+{
+    Scanning,
+    Ready,
+    ServiceError,
+}
+
+/// <summary>The Devices landing page and global shortcuts.</summary>
 public sealed partial class HomeViewModel(MainViewModel main) : TabViewModel
 {
-    public override string Header => "SYNAPSE";
-    public override string Title => "VIPER SYNAPSE";
-    public override TabIcon Icon => TabIcon.Synapse;
+    public override string Header => "DEVICES";
+    public override string Title => AppBranding.Name.ToUpperInvariant();
+    public override TabIcon Icon => TabIcon.Devices;
 
     public ObservableCollection<DeviceViewModel> Devices { get; } = [];
-
-    public static IReadOnlyList<string> Pages { get; } = ["DASHBOARD", "DEVICES & MODULES", "GLOBAL SHORTCUTS"];
-
     public ShortcutsViewModel Shortcuts { get; } = new(main);
 
-    [ObservableProperty] public partial string SelectedPage { get; set; } = "DASHBOARD";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsScanning), nameof(HasScanResult), nameof(HasServiceError))]
+    public partial DeviceDiscoveryState DiscoveryState { get; private set; }
 
-    public bool ShowDashboard => SelectedPage == "DASHBOARD";
-    public bool ShowModules => SelectedPage == "DEVICES & MODULES";
-    public bool ShowShortcuts => SelectedPage == "GLOBAL SHORTCUTS";
+    [ObservableProperty] public partial string? ServiceError { get; private set; }
 
-    public string Version => typeof(HomeViewModel).Assembly.GetName().Version?.ToString(3) ?? "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowDevicesPage))]
+    public partial bool ShowShortcutsPage { get; private set; }
 
-    partial void OnSelectedPageChanged(string value)
-    {
-        OnPropertyChanged(nameof(ShowDashboard));
-        OnPropertyChanged(nameof(ShowModules));
-        OnPropertyChanged(nameof(ShowShortcuts));
-        if (value == "GLOBAL SHORTCUTS")
-            _ = Shortcuts.LoadAsync();
-    }
+    public bool IsScanning => DiscoveryState == DeviceDiscoveryState.Scanning;
+    public bool HasScanResult => DiscoveryState == DeviceDiscoveryState.Ready;
+    public bool HasServiceError => DiscoveryState == DeviceDiscoveryState.ServiceError;
+    public bool ShowDevicesPage => !ShowShortcutsPage;
 
     public IAsyncRelayCommand RefreshCommand => main.RefreshCommand;
 
+    [RelayCommand]
+    void ShowShortcuts()
+    {
+        ShowShortcutsPage = true;
+        _ = Shortcuts.LoadAsync();
+    }
+
+    [RelayCommand]
+    void ShowDevices() => ShowShortcutsPage = false;
+
+    internal void SetDiscoveryState(DeviceDiscoveryState state, string? error = null)
+    {
+        ServiceError = error;
+        DiscoveryState = state;
+    }
+
     public void Open(DeviceViewModel device) => main.Show(device);
-    public void OpenLinkedGames() => main.Show(main.LinkedGames);
-    public void OpenMacros() => main.Show(main.Macros);
-    public void OpenSettings() => main.Show(main.Settings);
+
+    public void OpenHealth(DeviceViewModel device, DeviceUnitChoice unit)
+    {
+        if (!Devices.Contains(device) || !device.UnitChoices.Contains(unit))
+            return;
+        device.InspectedUnit = unit;
+        device.SelectedPage = DeviceViewModel.HealthPage;
+        main.Show(device);
+    }
 }

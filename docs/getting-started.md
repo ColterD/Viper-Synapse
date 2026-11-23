@@ -1,6 +1,6 @@
 # Getting started
 
-Viper Synapse runs on Linux. The desktop app starts its own user-space service when needed. You need the .NET 10 SDK to build from source and a Linux desktop session to use the app.
+Viper Relay runs on Linux. The desktop app starts its own user-space service when needed. You need the .NET 10 SDK to build from source and a Linux desktop session to use the app.
 
 ## Build from source
 
@@ -32,8 +32,8 @@ Check the [fork’s Releases page](https://github.com/ColterD/Viper-Synapse/rele
 ## Connect your first Razer device
 
 1. Install the package or set up device permissions as described above.
-2. Launch Viper Synapse from your normal desktop session. Connect the device over USB or through its wireless receiver. For Bluetooth, pair and connect it in your Linux desktop settings.
-3. On the Dashboard, select the device under **Devices**. Viper detects devices automatically. If you connected a device and it does not appear, try **Refresh devices** or reconnect it after setting up permissions.
+2. Launch Viper Relay from your normal desktop session. Connect the device over USB or through its wireless receiver. For Bluetooth, pair and connect it in your Linux desktop settings.
+3. Viper opens on **Devices** and scans automatically. Select a device when it appears. If the scan completes with no devices, check the connection and use **Refresh devices**. If Viper could not scan for devices, use **Retry scan** to reconnect to the service.
 4. Open the device’s **Health** tab to see its model, connection, and what features Viper can use on that connection. Open **Customize** for button mappings and use the other device tabs for features such as lighting or sensitivity where available. For a device with several connection modes, check Health again after switching modes.
 
 Installations from a tarball or source may need to load the `uinput` module again after a reboot for software remapping. Device-specific support and diagnostic commands are listed in [Device support](device-support.md).
@@ -41,7 +41,7 @@ Installations from a tarball or source may need to load the `uinput` module agai
 ## Troubleshoot
 
 - **The app cannot see the device.** Reconnect it after installing the udev rule, then follow [device diagnostics](device-support.md#collect-device-diagnostics).
-- **The device appears, but remapping is unavailable.** Check that the `uinput` module is loaded and that your desktop session can access `/dev/uinput`.
+- **The device appears, but remapping is unavailable.** Check that the `uinput` module is loaded and that your desktop session can access `/dev/uinput`, then refresh Devices. You can prepare software profiles and use supported firmware controls while remapping is unavailable.
 - **Linked profiles do not switch with the focused app.** Linked-program switching uses KDE Plasma, Hyprland, or X11. GNOME on Wayland does not expose the active window to this app.
 
 User settings live under `${XDG_CONFIG_HOME:-$HOME/.config}/viper-synapse`. The directory includes per-device profiles, macros, shortcuts, and app preferences.

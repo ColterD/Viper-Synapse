@@ -80,15 +80,30 @@ public sealed partial class BindingEditorViewModel : ObservableObject
 
     public KeyRowViewModel Row { get; }
     public string Title { get; }
+    public string? Target { get; }
+    public bool HasTargetStatus => Target != null || Conflict != null || SaveError != null || IsSaving;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTargetStatus))]
+    public partial string? Conflict { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTargetStatus))]
+    public partial bool IsSaving { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTargetStatus))]
+    public partial string? SaveError { get; set; }
     public bool ShowNagaDpiNotice => Row.Key.Group == "dpi buttons";
 
     public BindingEditorViewModel(KeyRowViewModel row, Binding binding, MacroLibrary macros, IReadOnlyList<Profile> profiles, int keymaps,
-        Action<KeyRowViewModel, Binding> save, Action close, string? title = null)
+        Action<KeyRowViewModel, Binding> save, Action close, string? title = null, string? target = null)
     {
         Row = row;
         _save = save;
         _close = close;
         Title = title ?? $"{row.Number}  {row.Key.Label}".Trim();
+        Target = target;
         ProfileChoices = [new(null, "Cycle Up Profile"), new(Guid.Empty, "Cycle Down Profile"), .. profiles.Select(p => new Choice<Guid?>(p.Id, p.Name))];
         KeymapChoices = [new(-1, "Cycle Up Keymap"), new(-2, "Cycle Down Keymap"), .. Enumerable.Range(0, Math.Max(1, keymaps)).Select(i => new Choice<int>(i, $"Keymap {i + 1}"))];
         MacroChoices = macros.Macros.Select(m => new Choice<Guid>(m.Id, m.Name)).ToList();
@@ -143,14 +158,14 @@ public sealed partial class BindingEditorViewModel : ObservableObject
     [ObservableProperty] public partial Choice<GamepadControl> SelectedGamepad { get; set; }
     [ObservableProperty] public partial string Text { get; set; } = "";
 
-    public bool CanSave => Kind switch
+    public bool CanSave => !IsSaving && Conflict == null && (Kind switch
     {
         FunctionKind.Keyboard => CapturedKey != 0,
         FunctionKind.Macro => SelectedMacro != null,
         FunctionKind.Launch => !string.IsNullOrWhiteSpace(Command),
         FunctionKind.Text => Text.Length > 0,
         _ => true,
-    };
+    });
 
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -263,5 +278,9 @@ public sealed partial class BindingEditorViewModel : ObservableObject
     }
 
     [RelayCommand]
-    void Cancel() => _close();
+    void Cancel()
+    {
+        if (!IsSaving)
+            _close();
+    }
 }

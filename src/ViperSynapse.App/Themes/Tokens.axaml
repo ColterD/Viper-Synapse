@@ -15,6 +15,10 @@
     <SolidColorBrush x:Key="TextDimBrush" Color="#B5B5B5" />
     <SolidColorBrush x:Key="CaptionBrush" Color="#B5B5B5" />
     <SolidColorBrush x:Key="ButtonGreyBrush" Color="#6B6C67" />
+    <SolidColorBrush x:Key="StatusGoodBrush" Color="#A7E3AD" />
+    <SolidColorBrush x:Key="StatusWarningBrush" Color="#F0CA85" />
+    <SolidColorBrush x:Key="StatusUnavailableBrush" Color="#FFB8B8" />
+    <SolidColorBrush x:Key="StatusNoticeBrush" Color="#33291C" />
     <SolidColorBrush x:Key="DangerBrush" Color="#E5484D" />
     <SolidColorBrush x:Key="DotGridBrush" Color="#333333" />
 </ResourceDictionary>
