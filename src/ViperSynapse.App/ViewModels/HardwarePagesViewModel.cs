@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ViperSynapse.Core.Devices;
 using ViperSynapse.Core.Lighting;
+using ViperSynapse.Core.Protocol;
 
 namespace ViperSynapse.App.ViewModels;
 
@@ -29,7 +30,11 @@ sealed class Debounce(Action action)
 }
 
 /// <summary>One LED of the plain grid editor.</summary>
-public sealed record LedCell(int Row, int Column, IBrush Brush);
+public sealed record LedCell(int Row, int Column, IBrush Brush, string? Label = null,
+    double Width = 44, IBrush? LabelBrush = null)
+{
+    public string AccessibleName => Label ?? $"LED row {Row + 1}, column {Column + 1}";
+}
 
 public sealed record EffectChoice(EffectKind Kind, string Label, IReadOnlyList<ColorMode> Modes)
 {
@@ -114,6 +119,8 @@ public sealed partial class LightingViewModel : ObservableObject
 
     // ---- Per-key (Custom) ----------------------------------------------------------------------------
 
+    bool UsesLegacyLighting => LegacyLightingCommands.SupportsProduct(_model?.ProductId);
+
     /// <summary>The device has an LED grid the custom effect can paint.</summary>
     public bool HasFrame => _model is { MatrixRows: > 0, MatrixColumns: > 0 } && _model.Has("custom_frame");
 
@@ -121,10 +128,27 @@ public sealed partial class LightingViewModel : ObservableObject
     public bool PaintsKeys => _model?.Keys.Any(k => k.Leds.Count > 0) == true;
 
     public bool ShowFrameEditor => SelectedEffect?.Kind == EffectKind.Custom;
+    public bool ShowBrightness => !ShowFrameEditor || _model?.Has("onboard_profiles") != true;
     public bool ShowKeyCanvas => ShowFrameEditor && PaintsKeys;
     public bool ShowLedGrid => ShowFrameEditor && !PaintsKeys;
+    public bool ShowZoneSync => !UsesLegacyLighting || !ShowFrameEditor;
+    public bool IsMouseLighting => _model?.Type == "mouse";
 
     CustomFrame _frame = CustomFrame.Filled(1, 1, Rgb.RazerGreen);
+    bool _keepLegacyFrame;
+
+    // OpenRGB's full keyboard map and BlackWidow Chroma V2 overlay, with ANSI legends.
+    // Spare positions remain accessible by matrix coordinates for other physical layouts.
+    static readonly string?[][] BlackWidowFrameLabels =
+    [
+        [null, "Esc", null, "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Prt", "Scr", "Pause", null, null, "Logo", null],
+        ["M1", "`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "Bksp", "Ins", "Home", "PgUp", "Num", "KP /", "KP *", "KP −"],
+        ["M2", "Tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "[", "]", "\\", "Del", "End", "PgDn", "KP 7", "KP 8", "KP 9", "KP +"],
+        ["M3", "Caps", "A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'", null, "Enter", null, null, null, "KP 4", "KP 5", "KP 6", null],
+        ["M4", "Shift", null, "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", null, "Shift", null, "↑", null, "KP 1", "KP 2", "KP 3", "KP ↵"],
+        ["M5", "Ctrl", "Win", "Alt", null, null, null, "Space", null, null, null, "Alt", "Fn", "Menu", "Ctrl", "←", "↓", "→", null, "KP 0", "KP .", null],
+    ];
+    static readonly string[] NagaFrameLabels = ["Scroll Wheel", "Logo", "Thumb Grid"];
 
     [ObservableProperty] public partial Color PaintColor { get; set; } = Color.Parse("#44D62C");
 
@@ -175,7 +199,16 @@ public sealed partial class LightingViewModel : ObservableObject
             for (int c = 0; c < _frame.Columns; c++)
             {
                 var rgb = _frame[r, c];
-                cells.Add(new LedCell(r, c, new SolidColorBrush(Color.FromRgb(rgb.R, rgb.G, rgb.B))));
+                string? label = _model?.ProductId switch
+                {
+                    0x0221 => BlackWidowFrameLabels[r][c],
+                    0x0053 => NagaFrameLabels[c],
+                    _ => null,
+                };
+                double width = _model?.ProductId switch { 0x0221 => 29, 0x0053 => 100, _ => 44 };
+                var brush = new SolidColorBrush(Color.FromRgb(rgb.R, rgb.G, rgb.B));
+                var labelBrush = rgb.R * 299 + rgb.G * 587 + rgb.B * 114 >= 128_000 ? Brushes.Black : Brushes.White;
+                cells.Add(new LedCell(r, c, brush, label, width, labelBrush));
             }
         Cells = cells;
         OnPropertyChanged(nameof(GridColumns));
@@ -224,14 +257,16 @@ public sealed partial class LightingViewModel : ObservableObject
         var choices = new List<EffectChoice>();
         foreach (var (kind, label) in EffectLabels)
         {
+            if (UsesLegacyLighting && !LegacyLightingCommands.SupportsEffect(kind))
+                continue;
             var modes = EffectSupport.NativeModes(kind, names)
-                .Union(_model != null && kind != EffectKind.Off ? EffectSupport.SoftwareModes(kind) : [])
+                .Union(!UsesLegacyLighting && _model != null && kind != EffectKind.Off ? EffectSupport.SoftwareModes(kind) : [])
                 .Distinct().Order().ToList();
             if (modes.Count > 0)
                 choices.Add(new EffectChoice(kind, label, modes));
         }
         if (HasFrame)
-            choices.Add(new EffectChoice(EffectKind.Custom, "Custom (per key)", [ColorMode.Single]));
+            choices.Add(new EffectChoice(EffectKind.Custom, _model?.Type == "mouse" ? "Custom (per LED)" : "Custom (per key)", [ColorMode.Single]));
         return choices;
     }
 
@@ -241,13 +276,22 @@ public sealed partial class LightingViewModel : ObservableObject
         try
         {
             _zones = settings?.Zones.ToDictionary(z => z.Key, z => z.Value) ?? [];
+            if (UsesLegacyLighting && LegacyFrameSetting() is { } custom)
+                foreach (var zone in Zones)
+                    _zones[zone] = new ZoneLighting(custom.Effect, _zones.GetValueOrDefault(zone)?.Brightness ?? 100);
             LightingOn = settings?.Off != true;
             OffWhenDisplayOff = settings?.OffWhenDisplayOff == true;
             OffWhenIdle = settings?.OffWhenIdleMinutes > 0;
             IdleMinutes = settings?.OffWhenIdleMinutes > 0 ? settings.OffWhenIdleMinutes : 1;
-            _frame = settings?.Frame is { } f && f.Rows == _model?.MatrixRows && f.Columns == _model?.MatrixColumns
-                ? f
-                : CustomFrame.Filled(Math.Max(1, _model?.MatrixRows ?? 1), Math.Max(1, _model?.MatrixColumns ?? 1), Rgb.RazerGreen);
+            var initialColor = _model?.Has("onboard_profiles") == true && _zones.TryGetValue("underglow", out var underglow)
+                ? underglow.Effect.Color1 : Rgb.RazerGreen;
+            var frame = settings?.Frame;
+            bool validFrame = frame != null && frame.Rows == _model?.MatrixRows && frame.Columns == _model?.MatrixColumns &&
+                frame.Colors?.Count == frame.Rows * frame.Columns;
+            _keepLegacyFrame = UsesLegacyLighting && validFrame;
+            _frame = validFrame
+                ? frame!
+                : CustomFrame.Filled(Math.Max(1, _model?.MatrixRows ?? 1), Math.Max(1, _model?.MatrixColumns ?? 1), initialColor);
             ShowFrame();
             ShowZone(SelectedZone);
         }
@@ -287,8 +331,10 @@ public sealed partial class LightingViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowQuick));
         OnPropertyChanged(nameof(ColorModeChoice));
         OnPropertyChanged(nameof(ShowFrameEditor));
+        OnPropertyChanged(nameof(ShowBrightness));
         OnPropertyChanged(nameof(ShowKeyCanvas));
         OnPropertyChanged(nameof(ShowLedGrid));
+        OnPropertyChanged(nameof(ShowZoneSync));
         OnPropertyChanged(nameof(ShowColor1));
         OnPropertyChanged(nameof(ShowColor2));
         OnPropertyChanged(nameof(ShowModes));
@@ -332,19 +378,28 @@ public sealed partial class LightingViewModel : ObservableObject
         var effect = new ZoneEffect(SelectedEffect.Kind, new Rgb(Color1.R, Color1.G, Color1.B), new Rgb(Color2.R, Color2.G, Color2.B),
             SelectedColorMode, (int)Speed, Reverse);
         var lighting = new ZoneLighting(effect, (int)Brightness);
-        foreach (var zone in SyncAll ? Zones : [SelectedZone])
+        bool legacyFrame = UsesLegacyLighting && (effect.Kind == EffectKind.Custom || LegacyFrameSetting() != null);
+        bool globalFrame = legacyFrame || _model?.Has("onboard_profiles") == true &&
+            (effect.Kind == EffectKind.Custom || _zones.Values.Any(z => z.Effect.Kind == EffectKind.Custom));
+        _keepLegacyFrame |= legacyFrame;
+        foreach (var zone in SyncAll || globalFrame ? Zones : [SelectedZone])
         {
             // A synced effect a zone cannot show (wave on a logo) leaves that zone as it was.
             if (zone == SelectedZone || EffectsFor(zone).Any(e => e.Kind == effect.Kind))
-                _zones[zone] = lighting;
+                _zones[zone] = legacyFrame && zone != SelectedZone
+                    ? lighting with { Brightness = _zones.GetValueOrDefault(zone)?.Brightness ?? 100 }
+                    : lighting;
         }
         _debounce.Poke();
     }
 
     void Commit() => _save(Current());
 
+    ZoneLighting? LegacyFrameSetting() => Zones.Select(zone => _zones.GetValueOrDefault(zone))
+        .FirstOrDefault(setting => setting?.Effect.Kind == EffectKind.Custom);
+
     LightingSettings Current() => new(new Dictionary<string, ZoneLighting>(_zones),
-        _zones.Values.Any(z => z.Effect.Kind == EffectKind.Custom) ? _frame : null,
+        _keepLegacyFrame || _zones.Values.Any(z => z.Effect.Kind == EffectKind.Custom) ? _frame : null,
         Off: !LightingOn, OffWhenDisplayOff: OffWhenDisplayOff, OffWhenIdleMinutes: OffWhenIdle ? (int)IdleMinutes : 0);
 
     // ---- Synapse 4 cards: the Brightness switch, Switch off lighting, Quick and Advanced effects ---------
@@ -410,6 +465,7 @@ public sealed partial class StageRow(int number, PerformanceViewModel owner) : O
 {
     public int Number { get; } = number;
     public int DpiMax => owner.DpiMax;
+    public int DpiStep => owner.DpiStep;
     public bool SeparateXY => owner.SeparateXY;
 
     internal void SeparateXYChanged() => OnPropertyChanged(nameof(SeparateXY));
@@ -433,11 +489,13 @@ public sealed partial class PerformanceViewModel : ObservableObject
         _save = save;
         _debounce = new Debounce(Commit);
         DpiMax = model?.DpiMax > 0 ? model.DpiMax : 20000;
+        DpiStep = model?.Has("onboard_profiles") == true ? 1 : 50;
         PollRates = model?.PollRates.Count > 0 ? model.PollRates : [125, 500, 1000];
         HasStages = model?.Has("dpi_stages") == true;
     }
 
     public int DpiMax { get; }
+    public int DpiStep { get; }
     public bool HasStages { get; }
     public IReadOnlyList<int> PollRates { get; }
     public ObservableCollection<StageRow> Stages { get; } = [];
@@ -556,11 +614,10 @@ public sealed partial class PerformanceViewModel : ObservableObject
     void Commit()
     {
         var stages = Stages.Select(s => new DpiStage(Round(s.X), Round(SeparateXY ? s.Y : s.X))).ToList();
-        _save(new PerformanceSettings(stages, Math.Clamp(ActiveStage, 0, stages.Count - 1), PollingRate));
+        _save(new PerformanceSettings(stages, Math.Clamp(ActiveStage, 0, Math.Max(0, stages.Count - 1)), PollingRate));
     }
 
-    /// <summary>Synapse moves sensitivity in steps of 50.</summary>
-    int Round(double dpi) => Math.Clamp((int)Math.Round(dpi / 50) * 50, 100, DpiMax);
+    int Round(double dpi) => Math.Clamp((int)Math.Round(dpi / DpiStep) * DpiStep, 100, DpiMax);
 }
 
 /// <summary>The POWER page: battery, sleep timer, low-power warning.</summary>
@@ -594,27 +651,45 @@ public sealed partial class ScrollWheelViewModel(Action<ScrollSettings> save) : 
 {
     bool _loading;
 
+    public sealed record WheelModeOption(string Label, ScrollWheelMode? Mode);
+
+    public IReadOnlyList<WheelModeOption> WheelModes { get; } =
+        [new("Use device setting", null), new("Tactile", ScrollWheelMode.Tactile), new("Free-spin", ScrollWheelMode.FreeSpin),
+            new("Precision Tactile", ScrollWheelMode.PrecisionTactile)];
     [ObservableProperty] public partial double LinesPerNotch { get; set; } = 1;
     [ObservableProperty] public partial bool Acceleration { get; set; }
     [ObservableProperty] public partial bool SmartReel { get; set; }
+    [ObservableProperty] public partial WheelModeOption? WheelMode { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasReportedWheelMode))]
+    public partial string? ReportedWheelMode { get; private set; }
+    public bool HasReportedWheelMode => ReportedWheelMode != null;
 
-    public void Load(ScrollSettings settings)
+    public void Load(ScrollSettings settings, ScrollWheelMode? reportedMode = null)
     {
         _loading = true;
         LinesPerNotch = settings.LinesPerNotch;
         Acceleration = settings.Acceleration;
         SmartReel = settings.SmartReel;
+        WheelMode = WheelModes.FirstOrDefault(option => option.Mode == settings.WheelMode) ?? WheelModes[0];
+        ReportedWheelMode = reportedMode == null ? null :
+            WheelModes.FirstOrDefault(option => option.Mode == reportedMode)?.Label;
         _loading = false;
     }
 
     partial void OnLinesPerNotchChanged(double value) => Changed();
     partial void OnAccelerationChanged(bool value) => Changed();
     partial void OnSmartReelChanged(bool value) => Changed();
+    partial void OnWheelModeChanged(WheelModeOption? value)
+    {
+        if (value != null)
+            Changed();
+    }
 
     void Changed()
     {
         if (!_loading)
-            save(new ScrollSettings(Math.Clamp((int)Math.Round(LinesPerNotch), 1, ScrollSettings.MaxLinesPerNotch), Acceleration, SmartReel));
+            save(new ScrollSettings(Math.Clamp((int)Math.Round(LinesPerNotch), 1, ScrollSettings.MaxLinesPerNotch),
+                Acceleration, SmartReel, WheelMode?.Mode));
     }
 }
 

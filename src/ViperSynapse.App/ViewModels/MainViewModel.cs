@@ -41,6 +41,8 @@ public sealed partial class MainViewModel : ObservableObject
     readonly DaemonClient _client;
     readonly List<TabViewModel> _back = [], _forward = [];
     bool _navigating;
+    long _requestedDeviceSnapshot;
+    long _appliedDeviceSnapshot;
 
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
@@ -162,11 +164,18 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    async Task RefreshDevicesAsync()
+    Task RefreshDevicesAsync() => RefreshDevicesAsync(_client.GetDevicesAsync);
+
+    internal async Task RefreshDevicesAsync(Func<Task<IReadOnlyList<DeviceInfo>>> readDevices)
     {
-        var devices = await _client.GetDevicesAsync().ConfigureAwait(false);
+        long request = Interlocked.Increment(ref _requestedDeviceSnapshot);
+        var devices = await readDevices().ConfigureAwait(false);
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            if (request < _appliedDeviceSnapshot)
+                return;
+            _appliedDeviceSnapshot = request;
+
             var current = Devices.ToList();
             // One tab per device model; a second identical device shares the tab and the settings.
             foreach (var info in devices.GroupBy(d => d.Key).Select(g => g.First()))
@@ -174,7 +183,13 @@ public sealed partial class MainViewModel : ObservableObject
                 var tab = current.FirstOrDefault(t => t.Key == info.Key);
                 if (tab != null)
                 {
+                    bool endpointChanged = tab.Info.Port != info.Port || tab.Info.ProductId != info.ProductId ||
+                        tab.Info.ControlNode != info.ControlNode || tab.Info.Firmware != info.Firmware || tab.Info.Serial != info.Serial ||
+                        tab.Info.OnboardProfile != info.OnboardProfile;
                     tab.Info = info;
+                    tab.RefreshOnboard();
+                    if (endpointChanged)
+                        _ = tab.ReloadAsync();
                     current.Remove(tab);
                     continue;
                 }

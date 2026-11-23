@@ -38,13 +38,13 @@ same on Wayland and X11.
 ## Devices
 
 The device catalogue covers 270+ Razer models (from OpenRazer's device data) plus our own entries.
-Tested on real hardware so far:
+Device support and validation:
 
 | Device | Status |
 | --- | --- |
 | Tartarus V2 Pro | key bindings, macros, lighting and per-key colours — tested |
 | Naga Left-Handed Edition 2020 | protocol, sensitivity and polling tested on the device; buttons and lighting in testing |
-| Basilisk V4 Pro | planned (wired and HyperSpeed) |
+| Basilisk V4 Pro | wired and HyperSpeed configuration, provisional Bluetooth input support. See [connection and feature coverage](docs/basilisk-v4-pro.md). |
 
 Other models in the catalogue are marked as untested in the app until someone confirms them.
 
@@ -80,6 +80,8 @@ Settings → About shows when the running build was made.
 
 `viper-cli list` shows the Razer devices it can see; `viper-cli probe /dev/hidrawN` reads a device's
 serial, firmware and settings without changing anything.
+
+For Basilisk V4 Pro firmware slots and buttons, see [onboard CLI usage](docs/basilisk-v4-pro.md#onboard-profiles-and-buttons).
 
 ## Acknowledgements
 

@@ -11,6 +11,8 @@
   <ItemGroup>
     <ProjectReference Include="..\ViperSynapse.Core\ViperSynapse.Core.csproj" />
     <ProjectReference Include="..\ViperSynapse.Hardware\ViperSynapse.Hardware.csproj" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="$(TmdsDBusVersion)" />
+    <InternalsVisibleTo Include="ViperSynapse.Tests" />
   </ItemGroup>
 
 </Project>

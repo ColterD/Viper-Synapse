@@ -596,7 +596,7 @@ public class DeviceFailureRecoveryTests
             var session = DeviceSession.Start([], engine);
             var device = AddDevice(manager, "usb-one", session);
             device.GetType().GetProperty("InputControlsStatus")!.SetValue(device, "partial");
-            device.GetType().GetProperty("InputControls")!.SetValue(device, new ushort[] { 30 });
+            device.GetType().GetProperty("EvdevControls")!.SetValue(device, new ushort[] { 30 });
             engine.Key(30, 1);
 
             ScanModel(manager, "ffff");

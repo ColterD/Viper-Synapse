@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\ViperSynapse.Hardware\ViperSynapse.Hardware.csproj" />
     <ProjectReference Include="..\..\src\ViperSynapse.Service\ViperSynapse.Service.csproj" />
     <ProjectReference Include="..\..\src\ViperSynapse.App\ViperSynapse.App.csproj" />
+    <ProjectReference Include="..\..\src\ViperSynapse.Cli\ViperSynapse.Cli.csproj" />
   </ItemGroup>
 
 </Project>

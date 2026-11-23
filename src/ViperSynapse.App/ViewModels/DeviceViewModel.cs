@@ -25,7 +25,7 @@ public sealed partial class KeyRowViewModel(DeviceKey key, bool bindingAvailable
     public partial string Category { get; set; } = "";
 
     /// <summary>The list's shorter caption: KEYBOARD, not KEYBOARD FUNCTION, as Synapse 4 prints it there.</summary>
-    public string ListCategory => Key.Group == "linux input" ? Key.Label :
+    public string ListCategory => Key.Group is "linux input" or "macro keys" or "thumb grid" or "tilt wheel" or "dpi buttons" ? Key.Label :
         Category.EndsWith(" FUNCTION", StringComparison.Ordinal) ? Category[..^" FUNCTION".Length] : Category;
 
     partial void OnCategoryChanged(string value) => OnPropertyChanged(nameof(ListCategory));
@@ -76,30 +76,32 @@ public sealed partial class DeviceViewModel : TabViewModel
     IReadOnlyList<ushort> _lastInputControls = [];
     string? _lastInputControlsStatus;
 
-    public DeviceViewModel(DeviceInfo info, MainViewModel main)
+    public DeviceViewModel(DeviceInfo info, MainViewModel main) :
+        this(info, main, new OnboardEditorViewModel(main.Client.GetDevicesAsync, main.Client.ManageOnboardAsync,
+            main.Client.BackupOnboardAsync, main.Client.RestoreOnboardAsync)) { }
+
+    internal DeviceViewModel(DeviceInfo info, MainViewModel main, OnboardEditorViewModel onboard)
     {
         _main = main;
+        Onboard = onboard;
         Info = info;
-        Model = DeviceCatalogue.Default.Find(Convert.ToUInt16(info.ProductId, 16));
+        ushort productId = Convert.ToUInt16(info.ProductId, 16);
+        if (info.Connection == "bluetooth" && productId == DeviceCatalogue.BasiliskV4ProBluetooth)
+            productId = DeviceCatalogue.BasiliskV4ProReceiver;
+        Model = info.Known ? DeviceCatalogue.Default.Find(productId) : null;
         RebuildControls();
         _controlsReady = true;
-        if (Model?.Has("keypad_buttons") == true)
-            FirmwareButtons = [new("RAZER HYPERSHIFT", "Razer Hypershift"), new("SWITCH KEYMAP", "Cycle Keymap"), new("SWITCH PROFILE", "Cycle Profile")];
-        else
-            // A mouse's firmware-only buttons are catalogue keys with no key code (the Basilisk V4 Pro's DPI, profile,
-            // scroll-mode, clutch and M1 buttons): listed under the others with what they do.
-            FirmwareButtons = Rows.Where(r => !r.Bindable).Select(r => new FirmwareButtonLine(FirmwareCategory(r.Key.Label), r.Key.Label, "Mouse")).ToList();
+        RebuildFirmwareButtons();
         Lighting = new LightingViewModel(Model, l => PushProfile(p => p with { Lighting = l }));
         Lighting.ApplyToOthers += effect =>
         {
-            foreach (var other in _main.Devices.Where(d => d != this))
+            foreach (var other in _main.Devices.Where(d => d != this && !d.IsBluetooth))
                 other.Lighting.Take(effect);
         };
         Performance = new PerformanceViewModel(Model, p => PushProfile(x => x with { Performance = p }));
         Power = new PowerViewModel(p => PushProfile(x => x with { Power = p }));
         Calibration = new CalibrationViewModel(c => PushProfile(x => x with { Calibration = c }));
         ScrollWheel = new ScrollWheelViewModel(s => PushProfile(x => x with { Scroll = s }));
-        Pages = BuildPages();
         SelectedPage = Pages[0];
         if (HasThumbstick)
         {
@@ -107,7 +109,7 @@ public sealed partial class DeviceViewModel : TabViewModel
             watch.Tick += (_, _) => KeepWatchingStick();
             watch.Start();
         }
-        if (HasBattery)
+        if (Model?.Has("battery") == true)
         {
             // The charge changes on its own: read it again every minute, battery only, so a page being edited is left be.
             var battery = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(1) };
@@ -120,6 +122,13 @@ public sealed partial class DeviceViewModel : TabViewModel
                 Dispatcher.UIThread.Post(() => Photo = photo);
         }, TaskScheduler.Default);
     }
+
+    internal const string OnboardPage = "ONBOARD";
+    internal const string HealthPage = "HEALTH";
+    internal DeviceHealth Health => DeviceHealth.From(Info, Model, UsingGenericControls);
+    public OnboardEditorViewModel Onboard { get; }
+    public bool HasOnboardPage => Model?.Has("onboard_profiles") == true && Info.Connection is ("wired" or "hyperspeed");
+    public bool IsOnboardPage => HasOnboardPage && SelectedPage == OnboardPage;
 
     /// <summary>The model's photo from Razer's servers, once fetched; null until then or when there is none.</summary>
     [ObservableProperty]
@@ -172,6 +181,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     }
     public string ShortName => (Model?.Name ?? Info.Name).Replace("Razer ", "", StringComparison.Ordinal);
     public bool IsKeypad => Model?.Type == "keypad";
+    public bool IsBluetooth => Info.Connection == "bluetooth";
 
     public IReadOnlyList<KeyRowViewModel> Rows { get; private set; } = [];
     public IReadOnlyList<KeyGroup> Groups { get; private set; } = [];
@@ -179,11 +189,20 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// <summary>The key list's "All Buttons" box: everything, or one group.</summary>
     public IReadOnlyList<string> KeyFilters { get; private set; } = [];
 
-    public bool UsingGenericControls => Model?.Keys.Count is null or 0;
+    public bool UsingGenericControls => IsBluetooth || Model?.Keys.Count is null or 0;
+
+    ushort? LegacyInputProduct => !IsBluetooth && Model is { } model && LegacyRemapControls.SupportsProduct(model.ProductId)
+        ? model.ProductId : null;
 
     public string GenericControlsStatus => Info.InputControlsStatus switch
     {
+        "available" when Info.NativeMacroKeys && LegacyInputProduct == LegacyRemapControls.BlackWidowChromaV2 =>
+            "Viper reads M1–M5 directly while a binding or shortcut uses them.",
+        "available" when LegacyInputProduct == LegacyRemapControls.BlackWidowChromaV2 &&
+            !(Info.InputControls ?? []).Any(source => LegacyRemapControls.Describe(LegacyRemapControls.BlackWidowChromaV2, source) != null) =>
+            "M keys appear when OpenRazer's driver mode exposes them to Linux as F13–F17.",
         "available" when (Info.InputControls?.Count ?? 0) == 0 => "This device advertises no compatible keyboard or mouse controls.",
+        "available" when LegacyInputProduct.HasValue => "Remapping uses the Linux input controls this device advertises.",
         "available" => "Linux input controls advertised by this device; physical locations and firmware buttons are not identified.",
         "partial" => "Some input nodes could not be read. Remapping is unavailable until device access is fixed; this list may be incomplete.",
         "permission" => "Cannot read the device's input controls. Check device access permissions.",
@@ -194,15 +213,9 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         _lastInputControls = (Info.InputControls ?? []).ToArray();
         _lastInputControlsStatus = Info.InputControlsStatus;
-        IReadOnlyList<DeviceKey> keys = Model?.Keys ?? [];
+        IReadOnlyList<DeviceKey> keys = UsingGenericControls ? [] : Model!.Keys;
         if (keys.Count == 0)
-            keys = (Info.InputControls ?? []).Distinct().Select(source => new DeviceKey(
-                0, source switch
-                {
-                    SourceKeys.WheelUp => "REL_WHEEL_UP", SourceKeys.WheelDown => "REL_WHEEL_DOWN",
-                    SourceKeys.WheelLeft => "REL_HWHEEL_LEFT", SourceKeys.WheelRight => "REL_HWHEEL_RIGHT",
-                    _ => KeyCodes.Name(source),
-                }, SourceKeys.IsWheel(source) ? (ushort)0 : source, 0, "linux input", source)).ToList();
+            keys = _lastInputControls.Distinct().Select(DescribeInput).OrderBy(key => key.Group == "linux input").ToList();
         Rows = keys.Select(k => new KeyRowViewModel(k, !UsingGenericControls || Info.InputControlsStatus == "available")).ToList();
         Groups = Rows.GroupBy(r => r.Key.Group).Select(g => new KeyGroup(GroupTitle(g.Key), g.ToList())).ToList();
         foreach (var group in Groups)
@@ -215,12 +228,27 @@ public sealed partial class DeviceViewModel : TabViewModel
         OnPropertyChanged(nameof(KeyLines));
     }
 
+    DeviceKey DescribeInput(ushort source)
+    {
+        if (LegacyInputProduct is ushort product && LegacyRemapControls.Describe(product, source) is { } named)
+            return named;
+
+        string label = source switch
+        {
+            SourceKeys.WheelUp => "REL_WHEEL_UP", SourceKeys.WheelDown => "REL_WHEEL_DOWN",
+            SourceKeys.WheelLeft => "REL_HWHEEL_LEFT", SourceKeys.WheelRight => "REL_HWHEEL_RIGHT",
+            _ => KeyCodes.Name(source),
+        };
+        return new DeviceKey(0, label, SourceKeys.IsWheel(source) ? (ushort)0 : source, 0, "linux input", source);
+    }
+
     [ObservableProperty]
     public partial string SelectedKeyFilter { get; set; } = "";
 
     partial void OnSelectedKeyFilterChanged(string value) => OnPropertyChanged(nameof(KeyLines));
 
-    static string FilterName(string upper) => System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(upper.ToLowerInvariant());
+    static string FilterName(string upper) => upper == "DPI BUTTONS" ? "DPI Buttons" :
+        System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(upper.ToLowerInvariant());
 
     /// <summary>The key list as Synapse 4 lays it out: groups of more than six keys run down two columns (1-13 on the
     /// left, 14-27 on the right). Keys the firmware keeps for itself are left to <see cref="FirmwareButtons"/>.</summary>
@@ -252,13 +280,27 @@ public sealed partial class DeviceViewModel : TabViewModel
         }
     }
 
-    public IReadOnlyList<FirmwareButtonLine> FirmwareButtons { get; } = [];
+    public IReadOnlyList<FirmwareButtonLine> FirmwareButtons { get; private set; } = [];
+
+    void RebuildFirmwareButtons()
+    {
+        if (UsingGenericControls)
+            FirmwareButtons = [];
+        else if (Model?.Has("keypad_buttons") == true)
+            FirmwareButtons = [new("RAZER HYPERSHIFT", "Razer Hypershift"), new("SWITCH KEYMAP", "Cycle Keymap"), new("SWITCH PROFILE", "Cycle Profile")];
+        else
+            FirmwareButtons = Rows.Where(r => !r.Bindable)
+                .Select(r => new FirmwareButtonLine(FirmwareCategory(r.Key.Label), r.Key.Label, "Mouse")).ToList();
+        OnPropertyChanged(nameof(FirmwareButtons));
+        OnPropertyChanged(nameof(HasFirmwareButtons));
+        OnPropertyChanged(nameof(KeyLines));
+    }
 
     public bool HasFirmwareButtons => FirmwareButtons.Count > 0;
 
     [RelayCommand]
     void SelectKey(KeyRowViewModel row) => SelectedKey = row;
-    public IReadOnlyList<string> Pages { get; }
+    public IReadOnlyList<string> Pages => BuildPages();
     public LightingViewModel Lighting { get; }
     public PerformanceViewModel Performance { get; }
     public PowerViewModel Power { get; }
@@ -267,7 +309,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// <summary>Every mouse gets the Scroll Wheel card (scroll speed); acceleration and Smart-Reel need the firmware's.</summary>
     public bool IsMouse => Model?.Type == "mouse";
 
-    public bool HasScrollFirmware => Model?.Has("scroll_wheel") == true;
+    public bool HasScrollFirmware => !IsBluetooth && Model?.Has("scroll_wheel") == true;
     public CalibrationViewModel Calibration { get; }
 
     [ObservableProperty]
@@ -322,7 +364,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     public bool HasThumbstick => Model?.Has("thumbstick") == true;
 
     /// <summary>Keypads show their polling rate on Customize; mice have it on Performance.</summary>
-    public bool HasPollingCard => Model?.Has("poll_rate") == true && Model?.Has("dpi") != true;
+    public bool HasPollingCard => !IsBluetooth && Model?.Has("poll_rate") == true && Model?.Has("dpi") != true;
 
     [ObservableProperty] public partial ThumbstickMode StickMode { get; set; }
     [ObservableProperty] public partial double StickX { get; set; }
@@ -393,11 +435,23 @@ public sealed partial class DeviceViewModel : TabViewModel
     partial void OnSelectedPageChanged(string value)
     {
         OnPropertyChanged(nameof(IsCustomize));
+        OnPropertyChanged(nameof(IsOnboardPage));
         KeepWatchingStick();
+        RefreshOnboard();
     }
 
     /// <summary>The tab came to the front.</summary>
-    public void Shown() => KeepWatchingStick();
+    public void Shown()
+    {
+        KeepWatchingStick();
+        RefreshOnboard();
+    }
+
+    internal void RefreshOnboard()
+    {
+        if (IsOnboardPage && Onboard.RefreshCommand.CanExecute(null))
+            Onboard.RefreshCommand.Execute(null);
+    }
 
     [ObservableProperty]
     public partial KeyRowViewModel? SelectedKey { get; set; }
@@ -411,6 +465,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     static readonly Avalonia.Media.IBrush BatteryRed = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#E5484D"));
 
     public bool HasBattery => Model?.Has("battery") == true;
+    long _batteryRequest;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(BatteryText), nameof(BatteryFill), nameof(BatteryKnown), nameof(BatteryBrush))]
@@ -438,30 +493,94 @@ public sealed partial class DeviceViewModel : TabViewModel
         BatteryPercent = percent;
     }
 
-    async Task RefreshBatteryAsync()
+    internal async Task RefreshBatteryAsync(Func<string, Task<int?>>? readBluetooth = null,
+        Func<string, Task<DeviceState?>>? readUsb = null)
     {
+        if (!HasBattery)
+            return;
+        var (info, request) = await Dispatcher.UIThread.InvokeAsync(() => (Info, ++_batteryRequest));
+        if (info.Connection == "bluetooth")
+        {
+            await ReadBluetoothBatteryAsync(info.Port, request, readBluetooth ?? BluetoothBattery.ReadAsync).ConfigureAwait(false);
+            return;
+        }
         try
         {
-            if (await _main.Client.GetDeviceStateAsync(Key).ConfigureAwait(false) is { } state && state.BatteryPercent != null)
-                await Dispatcher.UIThread.InvokeAsync(() => ShowBattery(state.BatteryPercent, state.Charging));
+            var read = readUsb ?? _main.Client.GetDeviceStateAsync;
+            if (await read(info.Key).ConfigureAwait(false) is { } state && state.BatteryPercent != null)
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (_batteryRequest == request)
+                        ShowBattery(state.BatteryPercent, state.Charging);
+                });
         }
         catch (Exception e) when (e is Tmds.DBus.Protocol.DBusErrorReplyException or InvalidOperationException or System.Text.Json.JsonException) { }
     }
 
-    public string Status => Info.Problem ?? (Info.Remapping ? "Active" : "Ready");
-    public string Details => $"{Info.Firmware}  ·  {(Info.Verified ? "Tested on this hardware" : Info.Known ? "From the OpenRazer catalogue, not yet tested here" : "Unknown model")}";
+    async Task ReadBluetoothBatteryAsync(string port, long request, Func<string, Task<int?>> read)
+    {
+        int? percent = await read(port).ConfigureAwait(false);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (_batteryRequest == request)
+                ShowBattery(percent, null);
+        });
+    }
 
-    partial void OnInfoChanged(DeviceInfo value)
+    static bool SameBatteryEndpoint(DeviceInfo previous, DeviceInfo current) =>
+        previous.Port == current.Port && previous.Connection == current.Connection &&
+        previous.ControlNode == current.ControlNode && previous.Serial == current.Serial;
+
+    public string Status => Info.Problem ?? (Info.Remapping ? "Active" : "Ready");
+    public string Details => Info.Connection switch
+    {
+        "bluetooth" when Info.Known => "Bluetooth · Linux input",
+        "wired" => ConnectionDetails("Wired USB"),
+        "hyperspeed" => ConnectionDetails("HyperSpeed"),
+        _ => $"{Info.Firmware}  ·  {(Info.Verified ? "Tested on this hardware" : Info.Known ? "From the OpenRazer catalogue, not yet tested here" : "Unknown model")}",
+    };
+
+    string ConnectionDetails(string connection)
+    {
+        var details = connection + " · " + (string.IsNullOrEmpty(Info.Firmware) ? "Firmware unavailable" : Info.Firmware);
+        return Info.OnboardProfile is byte slot ? $"{details} · Onboard profile {slot}" : details;
+    }
+
+    partial void OnInfoChanged(DeviceInfo oldValue, DeviceInfo newValue)
     {
         OnPropertyChanged(nameof(Status));
         OnPropertyChanged(nameof(Details));
         OnPropertyChanged(nameof(GenericControlsStatus));
-        if (_controlsReady && UsingGenericControls &&
-            (_lastInputControlsStatus != value.InputControlsStatus || !_lastInputControls.SequenceEqual(value.InputControls ?? [])))
+        OnPropertyChanged(nameof(Health));
+        if (!_controlsReady)
+            return;
+        if (!SameBatteryEndpoint(oldValue, newValue))
+        {
+            _batteryRequest++;
+            ShowBattery(null, null);
+        }
+        bool bluetoothChanged = (oldValue.Connection == "bluetooth") != IsBluetooth;
+        if (bluetoothChanged || UsingGenericControls &&
+            (_lastInputControlsStatus != newValue.InputControlsStatus || !_lastInputControls.SequenceEqual(newValue.InputControls ?? [])))
         {
             SelectedKey = null;
             RebuildControls();
+            RebuildFirmwareButtons();
             RefreshRows();
+        }
+        bool onboardChanged = (oldValue.Connection is "wired" or "hyperspeed") != HasOnboardPage &&
+            Model?.Has("onboard_profiles") == true;
+        if (bluetoothChanged || onboardChanged)
+        {
+            if (!Pages.Contains(SelectedPage))
+                SelectedPage = Pages[0];
+            OnPropertyChanged(nameof(UsingGenericControls));
+            OnPropertyChanged(nameof(ShowDrawing));
+            OnPropertyChanged(nameof(Pages));
+            OnPropertyChanged(nameof(HasOnboardPage));
+            OnPropertyChanged(nameof(IsOnboardPage));
+            OnPropertyChanged(nameof(HasScrollFirmware));
+            OnPropertyChanged(nameof(HasPollingCard));
         }
     }
 
@@ -469,11 +588,16 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         // Synapse 4's order: Customize, Performance, Lighting, Power, Calibration.
         var pages = new List<string> { "CUSTOMIZE" };
-        // Keypads show their polling rate on Customize; Performance is the mouse page.
-        if (Model?.Has("dpi") == true) pages.Add("PERFORMANCE");
-        if (Model?.Zones.Count > 0 || IsKeypad) pages.Add("LIGHTING");
-        if (Model?.Has("battery") == true) pages.Add("POWER");
-        if (Model?.Has("lift_off") == true) pages.Add("CALIBRATION");
+        if (!IsBluetooth)
+        {
+            // Keypads show their polling rate on Customize; Performance is the mouse page.
+            if (Model?.Has("dpi") == true) pages.Add("PERFORMANCE");
+            if (Model?.Zones.Count > 0 || IsKeypad) pages.Add("LIGHTING");
+            if (Model?.Has("battery") == true) pages.Add("POWER");
+            if (Model?.Has("lift_off") == true) pages.Add("CALIBRATION");
+            if (HasOnboardPage) pages.Add(OnboardPage);
+        }
+        pages.Add(HealthPage);
         return pages;
     }
 
@@ -550,7 +674,7 @@ public sealed partial class DeviceViewModel : TabViewModel
             Performance.Load(settings.Active.Performance ?? _deviceDefaults ?? Core.Lighting.PerformanceSettings.Default);
             Power.Load(settings.Active.Power ?? _devicePower ?? Core.Lighting.PowerSettings.Default);
             OnPropertyChanged(nameof(BatteryBrush));
-            ScrollWheel.Load(settings.Active.Scroll ?? _deviceScroll ?? Core.Lighting.ScrollSettings.Default);
+            ScrollWheel.Load(settings.Active.Scroll ?? _deviceScroll ?? Core.Lighting.ScrollSettings.Default, _deviceWheelMode);
             Calibration.Load(settings.Active.Calibration ?? new Core.Lighting.CalibrationSettings(_liftOff));
         }
         finally
@@ -564,6 +688,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     int _liftOff = -1;
     Core.Lighting.PowerSettings? _devicePower;
     Core.Lighting.ScrollSettings? _deviceScroll;
+    Core.Lighting.ScrollWheelMode? _deviceWheelMode;
 
     /// <summary>Reads what the device itself is set to, so Performance and Power show real values before the user
     /// changes anything.</summary>
@@ -571,21 +696,31 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         try
         {
-            if (await _main.Client.GetDeviceStateAsync(Key).ConfigureAwait(false) is not { } state)
+            var (info, batteryRequest) = await Dispatcher.UIThread.InvokeAsync(() => (Info, ++_batteryRequest));
+            if (info.Connection == "bluetooth")
+            {
+                if (HasBattery)
+                    await ReadBluetoothBatteryAsync(info.Port, batteryRequest, BluetoothBattery.ReadAsync).ConfigureAwait(false);
+                return;
+            }
+            if (await _main.Client.GetDeviceStateAsync(info.Key).ConfigureAwait(false) is not { } state)
                 return;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                if (!SameBatteryEndpoint(info, Info))
+                    return;
                 // A keypad reports a polling rate and no stages; its rate is still the device's own value.
                 if (state.Stages is { Count: > 0 } || state.PollingRate > 0)
                     _deviceDefaults = new Core.Lighting.PerformanceSettings(state.Stages ?? [], state.ActiveStage, state.PollingRate);
                 // A mouse asleep answers nothing: keep the last reading rather than blanking it.
-                if (state.BatteryPercent != null)
+                if (_batteryRequest == batteryRequest && state.BatteryPercent != null)
                     ShowBattery(state.BatteryPercent, state.Charging);
                 _liftOff = state.LiftOffLevel;
                 if (state.SleepSeconds > 0)
                     _devicePower = new Core.Lighting.PowerSettings(state.SleepSeconds, state.LowBatteryPercent > 0 ? state.LowBatteryPercent : Core.Lighting.PowerSettings.Default.LowBatteryPercent);
                 if (state.ScrollAcceleration != null || state.SmartReel != null)
                     _deviceScroll = new Core.Lighting.ScrollSettings(1, state.ScrollAcceleration == true, state.SmartReel == true);
+                _deviceWheelMode = state.WheelMode;
                 Load(_settings);
             });
         }

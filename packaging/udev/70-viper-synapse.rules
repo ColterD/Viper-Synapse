@@ -6,4 +6,6 @@
 # keyboard needs the user in the input group.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", TAG+="uaccess"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="1532", TAG+="uaccess"
+# Bluetooth Basilisk V4 Pro has Linux input remaps and needs no hidraw access.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/bustype}=="0005", ATTRS{id/vendor}=="1532", ATTRS{id/product}=="00e4", TAG+="uaccess"
 KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

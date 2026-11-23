@@ -80,6 +80,7 @@ public sealed partial class BindingEditorViewModel : ObservableObject
 
     public KeyRowViewModel Row { get; }
     public string Title { get; }
+    public bool ShowNagaDpiNotice => Row.Key.Group == "dpi buttons";
 
     public BindingEditorViewModel(KeyRowViewModel row, Binding binding, MacroLibrary macros, IReadOnlyList<Profile> profiles, int keymaps,
         Action<KeyRowViewModel, Binding> save, Action close, string? title = null)
