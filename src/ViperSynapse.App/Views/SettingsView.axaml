@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ViperSynapse.App.ViewModels"
+             xmlns:services="using:ViperSynapse.App.Services"
              x:Class="ViperSynapse.App.Views.SettingsView"
              x:DataType="vm:SettingsViewModel">
     <Grid RowDefinitions="44,*">
@@ -21,7 +22,7 @@
                             <CheckBox IsChecked="{Binding StartAtLogin}">
                                 <StackPanel>
                                     <TextBlock Text="Start Viper Synapse automatically when I sign in" />
-                                    <TextBlock Classes="caption" Text="OFF BY DEFAULT. BINDINGS AND MACROS NEED IT RUNNING." />
+                                    <TextBlock Classes="caption" Text="Bindings and macros need the app running." />
                                 </StackPanel>
                             </CheckBox>
                             <CheckBox IsChecked="{Binding StartMinimized}" IsEnabled="{Binding StartAtLogin}" Margin="24,0,0,0"
@@ -36,7 +37,7 @@
                                 <StackPanel>
                                     <TextBlock Text="Display on-screen notifications" />
                                     <TextBlock Classes="caption" TextWrapping="Wrap" MaxWidth="360"
-                                               Text="WHEN A PROFILE OR KEYMAP SWITCHES BY ITSELF: A LINKED GAME, THE KEYPAD'S BUTTONS." />
+                                               Text="Notify me when a game or keypad button switches a profile or keymap." />
                                 </StackPanel>
                             </CheckBox>
                         </StackPanel>
@@ -51,7 +52,24 @@
                 <StackPanel>
                     <Border Classes="card" Width="440">
                         <StackPanel Spacing="10">
-                            <TextBlock Classes="heading" Text="LANGUAGE" />
+                            <TextBlock Classes="heading" Text="Appearance" />
+                            <TextBlock Text="App accent" />
+                            <ComboBox Name="AccentChoiceBox" Width="220" AutomationProperties.Name="App accent"
+                                      ItemsSource="{x:Static vm:SettingsViewModel.Accents}" SelectedItem="{Binding SelectedAccent}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="services:AccentOption">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Ellipse Width="14" Height="14" Fill="{Binding Swatch}" />
+                                            <TextBlock Text="{Binding Label}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card" Width="440">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="heading" Text="Language" />
                             <ComboBox ItemsSource="{x:Static vm:SettingsViewModel.Languages}" SelectedItem="{Binding Language}" Width="220" />
                         </StackPanel>
                     </Border>
@@ -76,9 +94,9 @@
                         <TextBlock Classes="heading" Text="ABOUT" />
                         <Image Source="/Assets/logo.png" Height="140" HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding Version}" HorizontalAlignment="Center" Foreground="#CCCCCC" />
-                        <TextBlock HorizontalAlignment="Center" TextAlignment="Center" Foreground="#9A9A9A" FontSize="11" TextWrapping="Wrap"
+                        <TextBlock HorizontalAlignment="Center" TextAlignment="Center" Classes="caption" TextWrapping="Wrap"
                                    Text="Free software under the GPL-3.0-or-later. Not affiliated with or endorsed by Razer Inc.&#x0a;Device protocol knowledge from the OpenRazer project." />
-                        <Button Classes="link" Content="github.com/codingncaffeine/Viper-Synapse" HorizontalAlignment="Center" Click="OpenProject" />
+                        <Button Classes="link" Content="View project on GitHub" HorizontalAlignment="Center" Click="OpenProject" />
                     </StackPanel>
                 </Border>
             </WrapPanel>

@@ -300,6 +300,8 @@ public sealed partial class HomeViewModel(MainViewModel main) : TabViewModel
             _ = Shortcuts.LoadAsync();
     }
 
+    public IAsyncRelayCommand RefreshCommand => main.RefreshCommand;
+
     public void Open(DeviceViewModel device) => main.Show(device);
     public void OpenLinkedGames() => main.Show(main.LinkedGames);
     public void OpenMacros() => main.Show(main.Macros);

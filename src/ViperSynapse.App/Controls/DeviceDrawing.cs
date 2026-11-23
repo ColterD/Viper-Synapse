@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using ViperSynapse.App.Services;
 using ViperSynapse.App.ViewModels;
 
 namespace ViperSynapse.App.Controls;
@@ -46,9 +47,18 @@ public sealed class DeviceDrawing : Control
         set => SetValue(SelectedProperty, value);
     }
 
+    public static readonly StyledProperty<Color> AccentColorProperty =
+        AvaloniaProperty.Register<DeviceDrawing, Color>(nameof(AccentColor), AppAppearance.DefaultAccent);
+
+    public Color AccentColor
+    {
+        get => GetValue(AccentColorProperty);
+        set => SetValue(AccentColorProperty, value);
+    }
+
     static DeviceDrawing()
     {
-        AffectsRender<DeviceDrawing>(DeviceProperty, SelectedProperty, PaintColorsProperty);
+        AffectsRender<DeviceDrawing>(DeviceProperty, SelectedProperty, PaintColorsProperty, AccentColorProperty);
     }
 
     // Shapes in layout units, laid out once per device; Render scales them into the control.
@@ -80,16 +90,18 @@ public sealed class DeviceDrawing : Control
     };
     static readonly IPen KeyPen = new Pen(new SolidColorBrush(Color.Parse("#3C3C3C")), 1);
     static readonly IPen BodyPen = new Pen(new SolidColorBrush(Color.Parse("#383838")), 1.5);
-    static readonly IBrush Green = new SolidColorBrush(Color.Parse("#44D62C"));
-    static readonly IBrush GreenGlow = new SolidColorBrush(Color.Parse("#44D62C"), 0.18);
-    static readonly IPen GreenPen = new Pen(new SolidColorBrush(Color.Parse("#44D62C")), 2);
+    readonly SolidColorBrush _accent = new(AppAppearance.DefaultAccent);
+    readonly SolidColorBrush _accentGlow = new(AppAppearance.DefaultAccent, 0.18);
+    readonly SolidColorBrush _accentStrip = new(AppAppearance.DefaultAccent, 0.55);
     static readonly IBrush Label = new SolidColorBrush(Color.Parse("#E6E6E6"));
-    static readonly IBrush LabelDim = new SolidColorBrush(Color.Parse("#7A7A7A"));
+    static readonly IBrush LabelDim = new SolidColorBrush(Color.Parse("#AAAAAA"));
     static readonly Typeface Face = new(FontFamily.Default);
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
+        if (change.Property == AccentColorProperty)
+            _accent.Color = _accentGlow.Color = _accentStrip.Color = AccentColor;
         if (change.Property == DeviceProperty)
         {
             if (change.OldValue is DeviceViewModel old)
@@ -159,7 +171,7 @@ public sealed class DeviceDrawing : Control
         }
         _body.Add((body, BodyFill, BodyPen));
         // The LED strip down the right edge.
-        _body.Add((new RectangleGeometry(new Rect(gridRight + 22, 20, 6, 3 * (u + gap)), 3, 3), new SolidColorBrush(Color.Parse("#44D62C"), 0.55), null));
+        _body.Add((new RectangleGeometry(new Rect(gridRight + 22, 20, 6, 3 * (u + gap)), 3, 3), _accentStrip, null));
         // The wrist rest.
         _body.Add((new RectangleGeometry(new Rect(10, gridBottom + 38, gridRight - 130, 210), 40, 40), RestFill, BodyPen));
         // The thumb cluster: Hypershift (key 28 in the list), keymap and profile buttons, the analog stick.
@@ -333,18 +345,18 @@ public sealed class DeviceDrawing : Control
         }
         var shape = KeyGeometry(key);
         if (chosen || hovered)
-            context.DrawGeometry(GreenGlow, null, KeyGeometry(key with { Box = key.Box.Inflate(4) }));
-        context.DrawGeometry(KeyFill, chosen ? GreenPen : hovered ? new Pen(Green, 1.2) : KeyPen, shape);
+            context.DrawGeometry(_accentGlow, null, KeyGeometry(key with { Box = key.Box.Inflate(4) }));
+        context.DrawGeometry(KeyFill, chosen ? new Pen(_accent, 2) : hovered ? new Pen(_accent, 1.2) : KeyPen, shape);
         if (PaintColors is { } paint && paint.TryGetValue(key.Row.Key.Number, out var led))
             context.DrawGeometry(new SolidColorBrush(led, 0.85), null, shape);
         if (key.Round)
             return;
-        var number = Text(key.Row.Number, 10, key.Row.Changed ? Green : LabelDim);
+        var number = Text(key.Row.Number, 11, key.Row.Changed ? _accent : LabelDim);
         context.DrawText(number, new Point(key.Box.X + 6, key.Box.Y + 4));
         // Long labels (Right Click, Caps Lock) step down a size before they are cut short.
-        var value = Text(Shorten(key.Row.Value), key.Row.Value.Length > 7 ? 9.5 : 11, key.Row.Changed ? Green : Label);
+        var value = Text(Shorten(key.Row.Value), key.Row.Value.Length > 7 ? 9.5 : 11, key.Row.Changed ? _accent : Label);
         if (value.Width > key.Box.Width - key.Slant - 6)
-            value = Text(Shorten(key.Row.Value), 8.5, key.Row.Changed ? Green : Label);
+            value = Text(Shorten(key.Row.Value), 8.5, key.Row.Changed ? _accent : Label);
         context.DrawText(value, new Point(key.Box.X + (key.Box.Width - key.Slant - value.Width) / 2, key.Box.Bottom - value.Height - 7));
     }
 
@@ -352,7 +364,7 @@ public sealed class DeviceDrawing : Control
     /// to the edge of the picture's column, then to the button, ending in a dot.</summary>
     void DrawCallout(DrawingContext context, KeyShape key, Point anchor, bool lit)
     {
-        var brush = lit || key.Row.Changed ? Green : Label;
+        var brush = lit || key.Row.Changed ? _accent : Label;
         // A firmware-only button has no binding to show: its name says what it does.
         string label = key.Row.Bindable ? key.Row.Value : key.Row.Key.Label;
         var brushFinal = key.Row.Bindable ? brush : LabelDim;
@@ -362,15 +374,15 @@ public sealed class DeviceDrawing : Control
         double y = key.Box.Center.Y;
         double textX = key.LabelOnLeft ? key.Box.Right - 14 - text.Width : key.Box.X + 14;
         if (lit)
-            context.DrawGeometry(GreenGlow, null, new RectangleGeometry(new Rect(textX - 6, key.Box.Y, text.Width + 12, key.Box.Height), 4, 4));
+            context.DrawGeometry(_accentGlow, null, new RectangleGeometry(new Rect(textX - 6, key.Box.Y, text.Width + 12, key.Box.Height), 4, 4));
         context.DrawText(text, new Point(textX, y - text.Height / 2));
-        var pen = lit ? new Pen(Green, 1.2) : new Pen(LabelDim, 0.8);
+        var pen = lit ? new Pen(_accent, 1.2) : new Pen(LabelDim, 0.8);
         var start = new Point(key.LabelOnLeft ? key.Box.Right - 6 : key.Box.X + 6, y);
         var elbow = new Point(key.LabelOnLeft ? key.Box.Right + 30 : key.Box.X - 30, y);
         context.DrawLine(pen, start, elbow);
         context.DrawLine(pen, elbow, anchor);
-        context.DrawEllipse(lit ? Green : LabelDim, null, start, 2, 2);
-        context.DrawEllipse(lit ? Green : Label, null, anchor, 2.5, 2.5);
+        context.DrawEllipse(lit ? _accent : LabelDim, null, start, 2, 2);
+        context.DrawEllipse(lit ? _accent : Label, null, anchor, 2.5, 2.5);
     }
 
     static Geometry KeyGeometry(KeyShape key)

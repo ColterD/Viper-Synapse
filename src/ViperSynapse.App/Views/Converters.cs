@@ -12,9 +12,7 @@ public static class Converters
     public static readonly IValueConverter Is = new FuncValueConverter<object?, string?, bool>((value, parameter) =>
         value?.ToString() == parameter);
 
-    /// <summary>Green for a changed binding, white for a key doing what it does by itself.</summary>
-    public static readonly IValueConverter ChangedBrush = new FuncValueConverter<bool, IBrush>(changed =>
-        changed ? new SolidColorBrush(Color.Parse("#44D62C")) : Brushes.White);
+    public static readonly IValueConverter IsEmpty = new FuncValueConverter<int, bool>(count => count == 0);
 
     /// <summary>Keyboard and mouse functions offer Turbo.</summary>
     public static readonly IValueConverter IsTurbo = new FuncValueConverter<object?, bool>(value =>

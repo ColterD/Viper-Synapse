@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using ViperSynapse.App.Services;
 
 namespace ViperSynapse.App.Controls;
 
@@ -12,18 +13,30 @@ public sealed class StickView : Control
     public static readonly StyledProperty<double> YProperty = AvaloniaProperty.Register<StickView, double>(nameof(Y));
     public static readonly StyledProperty<int> DirectionsProperty = AvaloniaProperty.Register<StickView, int>(nameof(Directions));
 
+    public static readonly StyledProperty<Color> AccentColorProperty =
+        AvaloniaProperty.Register<StickView, Color>(nameof(AccentColor), AppAppearance.DefaultAccent);
+
+    public Color AccentColor { get => GetValue(AccentColorProperty); set => SetValue(AccentColorProperty, value); }
+
     public double X { get => GetValue(XProperty); set => SetValue(XProperty, value); }
     public double Y { get => GetValue(YProperty); set => SetValue(YProperty, value); }
 
     /// <summary>0 for analog, 4 or 8 for the direction modes.</summary>
     public int Directions { get => GetValue(DirectionsProperty); set => SetValue(DirectionsProperty, value); }
 
-    static StickView() => AffectsRender<StickView>(XProperty, YProperty, DirectionsProperty);
+    static StickView() => AffectsRender<StickView>(XProperty, YProperty, DirectionsProperty, AccentColorProperty);
 
     static readonly IPen Ring = new Pen(new SolidColorBrush(Color.Parse("#9A9A9A")), 1.5);
     static readonly IPen Guide = new Pen(new SolidColorBrush(Color.Parse("#3A3A3A")), 1);
-    static readonly IBrush Dot = new SolidColorBrush(Color.Parse("#44D62C"));
-    static readonly IBrush Glow = new SolidColorBrush(Color.Parse("#44D62C"), 0.25);
+    readonly SolidColorBrush _dot = new(AppAppearance.DefaultAccent);
+    readonly SolidColorBrush _glow = new(AppAppearance.DefaultAccent, 0.25);
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == AccentColorProperty)
+            _dot.Color = _glow.Color = AccentColor;
+    }
 
     public override void Render(DrawingContext context)
     {
@@ -40,7 +53,7 @@ public sealed class StickView : Control
             context.DrawEllipse(null, Guide, c, r * 0.5, r * 0.5);   // the press threshold
         }
         var p = new Point(c.X + Math.Clamp(X, -1, 1) * r, c.Y + Math.Clamp(Y, -1, 1) * r);
-        context.DrawEllipse(Glow, null, p, 9, 9);
-        context.DrawEllipse(Dot, null, p, 4.5, 4.5);
+        context.DrawEllipse(_glow, null, p, 9, 9);
+        context.DrawEllipse(_dot, null, p, 4.5, 4.5);
     }
 }

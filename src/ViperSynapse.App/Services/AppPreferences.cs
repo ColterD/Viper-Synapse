@@ -5,7 +5,7 @@ namespace ViperSynapse.App.Services;
 
 /// <summary>The window's own preferences (device settings live in the service). Stored in
 /// $XDG_CONFIG_HOME/viper-synapse/app.json.</summary>
-public sealed record AppPreferences(bool CloseToTray = true, bool StartMinimized = true, bool Notifications = true)
+public sealed record AppPreferences(bool CloseToTray = true, bool StartMinimized = true, bool Notifications = true, string? Accent = null)
 {
     static string FilePath => Path.Join(Autostart.ConfigHome(), "viper-synapse", "app.json");
 

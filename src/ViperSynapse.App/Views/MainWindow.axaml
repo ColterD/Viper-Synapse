@@ -43,7 +43,7 @@
                             <DataTemplate x:DataType="vm:TabViewModel">
                                 <StackPanel Orientation="Horizontal" Spacing="9">
                                     <Panel Width="20" Height="20" VerticalAlignment="Center">
-                                        <Ellipse Fill="{StaticResource GreenBrush}" IsVisible="{Binding Icon, Converter={x:Static views:Converters.TabInDisc}}" />
+                                        <Ellipse Fill="{DynamicResource AccentBrush}" IsVisible="{Binding Icon, Converter={x:Static views:Converters.TabInDisc}}" />
                                         <Image Source="/Assets/icon.png" Width="20" Height="20"
                                                IsVisible="{Binding Icon, Converter={x:Static views:Converters.Is}, ConverterParameter=Synapse}" />
                                         <TextBlock Text="{Binding Icon, Converter={x:Static views:Converters.TabGlyph}}" FontSize="12" FontWeight="Bold"

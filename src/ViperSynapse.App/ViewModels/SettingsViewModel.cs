@@ -4,13 +4,14 @@ using ViperSynapse.App.Services;
 namespace ViperSynapse.App.ViewModels;
 
 /// <summary>The SETTINGS tab, as Synapse 4 lays it out: SYNAPSE (auto-launch, the tray, notifications) and GENERAL
-/// (language, what's new, about). Start at sign-in is off unless the user turns it on.</summary>
+/// (appearance, language, what's new, about). Start at sign-in is off unless the user turns it on.</summary>
 public sealed partial class SettingsViewModel : TabViewModel
 {
     readonly MainViewModel _main;
     AppPreferences _preferences;
     readonly bool _ready;
     readonly string _built;
+    Task _pendingSave = Task.CompletedTask;
 
     /// <summary>Creates the settings tab from the preferences and autostart state read at startup.</summary>
     /// <param name="main">The window.</param>
@@ -26,6 +27,7 @@ public sealed partial class SettingsViewModel : TabViewModel
         StartMinimized = preferences.StartMinimized;
         CloseToTray = preferences.CloseToTray;
         Notifications = preferences.Notifications;
+        SelectedAccent = AppAppearance.Resolve(preferences.Accent);
         _ready = true;
     }
 
@@ -33,6 +35,7 @@ public sealed partial class SettingsViewModel : TabViewModel
     public override TabIcon Icon => TabIcon.Settings;
 
     public static IReadOnlyList<string> Pages { get; } = ["SYNAPSE", "GENERAL"];
+    public static IReadOnlyList<AccentOption> Accents => AppAppearance.Accents;
     public static IReadOnlyList<string> Languages { get; } = ["English"];
 
     [ObservableProperty] public partial string SelectedPage { get; set; } = "SYNAPSE";
@@ -41,6 +44,8 @@ public sealed partial class SettingsViewModel : TabViewModel
     [ObservableProperty] public partial bool CloseToTray { get; set; }
     [ObservableProperty] public partial bool Notifications { get; set; }
     [ObservableProperty] public partial string Language { get; set; } = "English";
+
+    [ObservableProperty] public partial AccentOption? SelectedAccent { get; set; }
 
     public bool ShowSynapse => SelectedPage == "SYNAPSE";
     public bool ShowGeneral => SelectedPage == "GENERAL";
@@ -65,6 +70,14 @@ public sealed partial class SettingsViewModel : TabViewModel
 
     partial void OnNotificationsChanged(bool value) => Save(_preferences with { Notifications = value });
 
+    partial void OnSelectedAccentChanged(AccentOption? value)
+    {
+        if (value is null)
+            return;
+        AppAppearance.Apply(value);
+        Save(_preferences with { Accent = value.Id });
+    }
+
     void WriteAutostart()
     {
         if (!_ready)
@@ -81,6 +94,15 @@ public sealed partial class SettingsViewModel : TabViewModel
         if (!_ready)
             return;
         _preferences = preferences;
-        _ = preferences.SaveAsync();
+        _pendingSave = SaveAfterAsync(_pendingSave, preferences);
+    }
+
+    internal Task PendingSave => _pendingSave;
+    internal Func<AppPreferences, Task> WritePreferences { get; init; } = preferences => preferences.SaveAsync();
+
+    async Task SaveAfterAsync(Task previous, AppPreferences preferences)
+    {
+        await previous.ConfigureAwait(false);
+        await WritePreferences(preferences).ConfigureAwait(false);
     }
 }
