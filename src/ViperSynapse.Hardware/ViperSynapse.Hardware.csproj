@@ -10,6 +10,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="ViperSynapse.Tests" />
     <InternalsVisibleTo Include="viper-cli" />
+    <InternalsVisibleTo Include="viper-synapse" />
+    <InternalsVisibleTo Include="viper-synapsed" />
   </ItemGroup>
 
   <ItemGroup>

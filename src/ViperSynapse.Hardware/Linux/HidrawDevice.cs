@@ -2,8 +2,17 @@ using System.Runtime.InteropServices;
 
 namespace ViperSynapse.Hardware.Linux;
 
+public interface IHidFeatureDevice : IDisposable
+{
+    string Path { get; }
+    void SendFeature(ReadOnlySpan<byte> report);
+    int ReceiveFeature(Span<byte> report);
+}
+
+internal sealed class HidrawDeviceDisconnectedException(string message) : IOException(message);
+
 /// <summary>An open hidraw node: feature reports in and out. Not thread-safe; one owner talks to it.</summary>
-public sealed class HidrawDevice : IDisposable
+public sealed class HidrawDevice : IHidFeatureDevice
 {
     int _fd;
 
@@ -56,7 +65,11 @@ public sealed class HidrawDevice : IDisposable
     {
         ObjectDisposedException.ThrowIf(_fd < 0, this);
         if (result < 0)
-            throw new IOException($"{Path}: could not {what}: {Libc.ErrorText(Marshal.GetLastPInvokeError())}");
+        {
+            int error = Marshal.GetLastPInvokeError();
+            string message = $"{Path}: could not {what}: {Libc.ErrorText(error)}";
+            throw error == Libc.ENODEV ? new HidrawDeviceDisconnectedException(message) : new IOException(message);
+        }
     }
 
     public void Dispose()

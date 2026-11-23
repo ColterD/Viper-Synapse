@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using ViperSynapse.Core.Bindings;
+using ViperSynapse.Core.Devices;
 using ViperSynapse.Core.Input;
 
 namespace ViperSynapse.Core.Engine;
@@ -83,6 +84,9 @@ public sealed class RemapEngine
             var binding = _host.Shortcuts.Completed(code, _held.ContainsKey)?.Binding ?? Keymap.Resolve(code, HypershiftActive);
             if (binding is DefaultBinding && SourceKeys.IsStick(code))
                 binding = Defaults?.Invoke(code) ?? new DisableBinding();
+            // The Naga's vendor DPI buttons have no default virtual input event.
+            if (binding is DefaultBinding && LegacyRemapControls.IsNagaDpiSource(code))
+                binding = new DisableBinding();
             var owner = _sink.CreateOwner();
             _held[code] = binding;
             _owners[code] = owner;

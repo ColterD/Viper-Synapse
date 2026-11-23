@@ -146,7 +146,13 @@ public static class DeviceCommands
 
     /// <summary>Brightness 0-100 % as the device's 0-255.</summary>
     public static RazerReport Brightness(byte tid, byte led, int percent, byte store = VarStore) =>
-        RazerReport.Create(tid, 0x0F, 0x04, store, led, (byte)Math.Round(Math.Clamp(percent, 0, 100) * 255 / 100.0, MidpointRounding.AwayFromZero));
+        BrightnessRaw(tid, led, BrightnessValue(percent), store);
+
+    public static byte BrightnessValue(int percent) =>
+        (byte)Math.Round(Math.Clamp(percent, 0, 100) * 255 / 100.0, MidpointRounding.AwayFromZero);
+
+    public static RazerReport BrightnessRaw(byte tid, byte led, byte value, byte store) =>
+        RazerReport.Create(tid, 0x0F, 0x04, store, led, value);
 
     public static RazerReport Dpi(byte tid, int x, int y)
     {
@@ -160,10 +166,10 @@ public static class DeviceCommands
     /// <summary>The stage table: active stage (1-based), count, then seven bytes a stage. Devices that keep a third copy
     /// of each stage's sensitivity in the last two bytes of its entry (the Basilisk V4 Pro reads back 400 400 400) get
     /// it written the same way when <paramref name="thirdValue"/> is set; others (the Naga) keep zeros.</summary>
-    public static RazerReport DpiStages(byte tid, PerformanceSettings p, bool thirdValue = false)
+    public static RazerReport DpiStages(byte tid, PerformanceSettings p, bool thirdValue = false, byte store = VarStore)
     {
         var a = new byte[0x26];
-        a[0] = VarStore;
+        a[0] = store;
         // Never more stages than the table holds, so the count matches what follows it.
         int count = Math.Min(p.Stages.Count, PerformanceSettings.MaxStages);
         a[1] = (byte)(Math.Clamp(p.ActiveStage, 0, count - 1) + 1);
@@ -272,10 +278,15 @@ public static class DeviceCommands
 
     /// <summary>Scroll acceleration on or off (0x02/0x16; read back with 0x02/0x96). On or off only: a level byte is
     /// accepted but not kept.</summary>
-    public static RazerReport ScrollAcceleration(byte tid, bool on) => RazerReport.Create(tid, 0x02, 0x16, VarStore, on ? (byte)1 : (byte)0);
+    public static RazerReport ScrollAcceleration(byte tid, bool on, byte store = VarStore) =>
+        RazerReport.Create(tid, 0x02, 0x16, store, on ? (byte)1 : (byte)0);
 
     /// <summary>Smart-Reel on or off (0x02/0x17; read back with 0x02/0x97).</summary>
-    public static RazerReport SmartReel(byte tid, bool on) => RazerReport.Create(tid, 0x02, 0x17, VarStore, on ? (byte)1 : (byte)0);
+    public static RazerReport SmartReel(byte tid, bool on, byte store = VarStore) =>
+        RazerReport.Create(tid, 0x02, 0x17, store, on ? (byte)1 : (byte)0);
+
+    public static RazerReport SetScrollWheelMode(byte tid, ScrollWheelMode mode) =>
+        RazerReport.Create(tid, 0x02, 0x30, 0, (byte)mode);
 
     public static int ReadBatteryPercent(RazerReport answer) => (int)Math.Round(answer.Arguments[1] / 2.55);
 

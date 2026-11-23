@@ -26,9 +26,11 @@ public sealed record CalibrationSettings(int LiftOffLevel)
     public static CalibrationSettings Default { get; } = new(-1);
 }
 
-/// <summary>A mouse's Scroll Wheel card. <see cref="LinesPerNotch"/> is applied in software (each notch of the wheel
+public enum ScrollWheelMode : byte { Tactile, FreeSpin, PrecisionTactile }
+
+/// <summary>A mouse's Scroll Wheel card. LinesPerNotch is applied in software (each notch of the wheel
 /// scrolls that many times as far); acceleration and Smart-Reel are the firmware's own, on mice that have them.</summary>
-public sealed record ScrollSettings(int LinesPerNotch = 1, bool Acceleration = false, bool SmartReel = false)
+public sealed record ScrollSettings(int LinesPerNotch = 1, bool Acceleration = false, bool SmartReel = false, ScrollWheelMode? WheelMode = null)
 {
     public const int MaxLinesPerNotch = 10;
 

@@ -41,15 +41,47 @@ public sealed record DeviceModel(
 /// </summary>
 public sealed class DeviceCatalogue
 {
-    readonly FrozenDictionary<ushort, DeviceModel> _models;
+    public const ushort BasiliskV4ProWired = 0x00e2;
+    public const ushort BasiliskV4ProReceiver = 0x00e3;
+    // Reported by Synapsex. Limit this ID to Bluetooth and expose only discovered Linux inputs.
+    public const ushort BasiliskV4ProBluetooth = 0x00e4;
 
-    DeviceCatalogue(Dictionary<ushort, DeviceModel> models) => _models = models.ToFrozenDictionary();
+    readonly FrozenDictionary<ushort, DeviceModel> _models;
+    readonly DeviceModel _basiliskBluetooth;
+
+    DeviceCatalogue(Dictionary<ushort, DeviceModel> models)
+    {
+        var basilisk = models[BasiliskV4ProReceiver];
+        models[BasiliskV4ProWired] = basilisk with
+        {
+            ProductId = BasiliskV4ProWired,
+            Source = "OpenRazer Basilisk V4 Pro wired report",
+        };
+        _basiliskBluetooth = basilisk with
+        {
+            ProductId = BasiliskV4ProBluetooth,
+            Keys = [],
+            Zones = FrozenDictionary<string, LightingZone>.Empty,
+            Features = FrozenSet<string>.Empty,
+            DpiMax = 0,
+            PollRates = [],
+            Source = "Synapsex reported Bluetooth ID + Linux input discovery",
+        };
+        _models = models.ToFrozenDictionary();
+    }
 
     public static DeviceCatalogue Default { get; } = LoadEmbedded();
 
     public IReadOnlyCollection<DeviceModel> Models => _models.Values;
 
-    public DeviceModel? Find(ushort productId) => _models.GetValueOrDefault(productId);
+    public DeviceModel? Find(ushort productId, bool bluetooth = false)
+    {
+        if (bluetooth && productId == BasiliskV4ProBluetooth)
+            return _basiliskBluetooth;
+        if (bluetooth && productId is BasiliskV4ProWired or BasiliskV4ProReceiver)
+            return null;
+        return _models.GetValueOrDefault(productId);
+    }
 
     static DeviceCatalogue LoadEmbedded()
     {

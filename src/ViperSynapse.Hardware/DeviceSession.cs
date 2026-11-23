@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using ViperSynapse.Core.Bindings;
+using ViperSynapse.Core.Devices;
 using ViperSynapse.Core.Engine;
 using ViperSynapse.Hardware.Linux;
 
@@ -8,8 +9,11 @@ namespace ViperSynapse.Hardware;
 /// <summary>One input node of a physical device, as sysfs lists it.</summary>
 public sealed record InputNode(string DevicePath, ushort VendorId, ushort ProductId, string Name, string Phys)
 {
-    /// <summary>The USB port path without the interface, shared by every node of one device.</summary>
-    public string PortPath => Phys.LastIndexOf('/') is var slash and >= 0 ? Phys[..slash] : Phys;
+    public ushort Bus { get; init; } = HidrawNode.UsbBus;
+    public string Unique { get; init; } = "";
+
+    /// <summary>The USB port or Bluetooth peer address shared by this device's nodes.</summary>
+    public string PortPath => HidrawNode.PhysicalPort(Bus, Phys, Unique);
 
     public static IReadOnlyList<InputNode> Enumerate(string sysRoot = "/sys/class/input")
     {
@@ -27,7 +31,12 @@ public sealed record InputNode(string DevicePath, ushort VendorId, ushort Produc
             if (!ushort.TryParse(Read("id/vendor"), System.Globalization.NumberStyles.HexNumber, null, out var vendor)
                 || !ushort.TryParse(Read("id/product"), System.Globalization.NumberStyles.HexNumber, null, out var product))
                 continue;
-            nodes.Add(new InputNode("/dev/input/" + Path.GetFileName(dir), vendor, product, Read("name"), Read("phys")));
+            bool hasBus = ushort.TryParse(Read("id/bustype"), System.Globalization.NumberStyles.HexNumber, null, out var bus);
+            nodes.Add(new InputNode("/dev/input/" + Path.GetFileName(dir), vendor, product, Read("name"), Read("phys"))
+            {
+                Bus = hasBus ? bus : HidrawNode.UsbBus,
+                Unique = Read("uniq"),
+            });
         }
         nodes.Sort((a, b) => string.CompareOrdinal(a.DevicePath, b.DevicePath));
         return nodes;
@@ -45,10 +54,75 @@ public sealed class DeviceSession : IDisposable
     readonly List<EvdevDevice> _nodes = [];
     readonly List<Thread> _threads = [];
     readonly Lock _engineGate = new();
+    // Composite devices may advertise one Linux key code on several interfaces.
+    readonly Dictionary<ushort, HashSet<string>> _keyNodes = [];
+    IDisposable? _macroReader;
+    IDisposable? _macroMode;
+    readonly List<IDisposable> _nagaReaders = [];
+    internal bool HasNativeNagaTilt { get; private set; }
+    internal bool HasNativeNagaDpi { get; private set; }
     volatile bool _stopping;
 
     public RemapEngine Engine { get; }
     public IReadOnlyList<string> NodePaths => _nodes.Select(n => n.Path).ToList();
+    internal bool HasNativeMacroKeys => _macroReader != null;
+
+    internal void AttachNativeMacroKeys(IDisposable reader, IDisposable mode)
+    {
+        lock (_engineGate)
+        {
+            ReleaseNativeAliases(LegacyRemapControls.IsMacroSource);
+            Engine.Sync();
+            (_macroReader, _macroMode) = (reader, mode);
+        }
+    }
+
+    internal void DispatchNativeMacroKey(string path, ushort source, int value)
+    {
+        lock (_engineGate)
+        {
+            if (_stopping || _macroReader == null || !LegacyRemapControls.IsMacroSource(source))
+                return;
+            DispatchKey(path, source, value);
+            Engine.Sync();
+        }
+    }
+
+    internal void AttachNativeNagaReader(IDisposable reader, bool tilt, bool dpi)
+    {
+        lock (_engineGate)
+        {
+            if (tilt && !HasNativeNagaTilt)
+                ReleaseNativeAliases(LegacyRemapControls.IsNagaTiltSource);
+            if (dpi && !HasNativeNagaDpi)
+                ReleaseNativeAliases(LegacyRemapControls.IsNagaDpiSource);
+            Engine.Sync();
+            HasNativeNagaTilt |= tilt;
+            HasNativeNagaDpi |= dpi;
+            _nagaReaders.Add(reader);
+        }
+    }
+
+    void ReleaseNativeAliases(Func<ushort, bool> matches)
+    {
+        foreach (ushort source in _keyNodes.Keys.Where(matches).ToArray())
+        {
+            _keyNodes.Remove(source);
+            Engine.Key(source, 0);
+        }
+    }
+
+    internal void DispatchNativeNagaKey(string path, ushort source, int value, bool tilt, bool dpi)
+    {
+        lock (_engineGate)
+        {
+            if (_stopping || !(tilt && HasNativeNagaTilt && LegacyRemapControls.IsNagaTiltSource(source) ||
+                               dpi && HasNativeNagaDpi && LegacyRemapControls.IsNagaDpiSource(source)))
+                return;
+            DispatchKey(path, source, value);
+            Engine.Sync();
+        }
+    }
 
     readonly StickDirections _stick;
     readonly HashSet<string> _stickNodes = [];
@@ -64,7 +138,7 @@ public sealed class DeviceSession : IDisposable
     /// <summary>Raised on a reader thread when a node goes away (unplugged) or fails.</summary>
     public event Action<string, Exception>? NodeLost;
 
-    DeviceSession(RemapEngine engine, ThumbstickMode stick)
+    internal DeviceSession(RemapEngine engine, ThumbstickMode stick)
     {
         Engine = engine;
         _stick = new StickDirections(stick);
@@ -139,6 +213,7 @@ public sealed class DeviceSession : IDisposable
             }
             try { Engine.Reset(); }
             catch (Exception error) { failure ??= error; }
+            _keyNodes.Clear();
             Engine.Keymap = keymap;
             if (failure != null)
                 ExceptionDispatchInfo.Capture(failure).Throw();
@@ -207,7 +282,7 @@ public sealed class DeviceSession : IDisposable
                         if (stick)
                             DispatchStick(events[i]);
                         else
-                            Dispatch(events[i]);
+                            Dispatch(node.Path, events[i]);
                     }
                 }
             }
@@ -245,14 +320,14 @@ public sealed class DeviceSession : IDisposable
         }
     }
 
-    void Dispatch(in InputEvent e)
+    internal void Dispatch(string nodePath, in InputEvent e)
     {
         switch (e.Type)
         {
-            case EventTypes.Key:
-                if (e.Value == 1)
-                    KeyPressed?.Invoke(e.Code);
-                Engine.Key(e.Code, e.Value);
+            case EventTypes.Key when (_macroReader == null || !LegacyRemapControls.IsMacroSource(e.Code)) &&
+                (!HasNativeNagaTilt || !LegacyRemapControls.IsNagaTiltSource(e.Code)) &&
+                (!HasNativeNagaDpi || !LegacyRemapControls.IsNagaDpiSource(e.Code)):
+                DispatchKey(nodePath, e.Code, e.Value);
                 break;
             case EventTypes.Rel when e.Code is RelativeAxes.Wheel or RelativeAxes.HWheel or RelativeAxes.WheelHiRes or RelativeAxes.HWheelHiRes:
                 Engine.Wheel(e.Code, e.Value);
@@ -262,6 +337,29 @@ public sealed class DeviceSession : IDisposable
                 break;
             case EventTypes.Syn when e.Code == EventTypes.SynReport:
                 Engine.Sync();
+                break;
+        }
+    }
+
+    void DispatchKey(string nodePath, ushort code, int value)
+    {
+        _keyNodes.TryGetValue(code, out var nodes);
+        switch (value)
+        {
+            case 1 when nodes == null:
+                _keyNodes.Add(code, [nodePath]);
+                KeyPressed?.Invoke(code);
+                Engine.Key(code, 1);
+                break;
+            case 1:
+                nodes!.Add(nodePath);
+                break;
+            case 0 when nodes != null && nodes.Remove(nodePath) && nodes.Count == 0:
+                _keyNodes.Remove(code);
+                Engine.Key(code, 0);
+                break;
+            case 2 when nodes?.Contains(nodePath) == true:
+                Engine.Key(code, 2);
                 break;
         }
     }
@@ -276,6 +374,15 @@ public sealed class DeviceSession : IDisposable
                 Engine.Reset();
         }
         catch (Exception error) { failure = error; }
+        try { _macroReader?.Dispose(); }
+        catch (Exception error) { failure ??= error; }
+        try { _macroMode?.Dispose(); }
+        catch (Exception error) { failure ??= error; }
+        foreach (var reader in _nagaReaders)
+        {
+            try { reader.Dispose(); }
+            catch (Exception error) { failure ??= error; }
+        }
         // Readers wake from poll within 100 ms and see the flag; only then are the nodes closed, so no
         // read can land on a descriptor number the process has already reused.
         foreach (var thread in _threads)

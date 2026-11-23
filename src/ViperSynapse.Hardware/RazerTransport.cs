@@ -10,15 +10,16 @@ namespace ViperSynapse.Hardware;
 /// </summary>
 public sealed class RazerTransport : IDisposable
 {
-    readonly HidrawDevice _device;
+    readonly IHidFeatureDevice _device;
     readonly Lock _gate = new();
+    bool _disposed;
 
     /// <summary>How long the device gets to prepare its answer before the first read. Razer firmware
     /// needs well under a millisecond for most commands; a busy answer waits again.</summary>
     public TimeSpan AnswerDelay { get; init; } = TimeSpan.FromMilliseconds(1);
     public int BusyRetries { get; init; } = 20;
 
-    public RazerTransport(HidrawDevice device) => _device = device;
+    public RazerTransport(IHidFeatureDevice device) => _device = device;
 
     public string Path => _device.Path;
 
@@ -26,6 +27,8 @@ public sealed class RazerTransport : IDisposable
     {
         lock (_gate)
         {
+            if (_disposed)
+                throw new IOException($"{Path}: the control interface is closed.");
             var wire = new byte[RazerReport.Size + 1];
             request.Bytes.CopyTo(wire.AsSpan(1));
             _device.SendFeature(wire);
@@ -33,7 +36,8 @@ public sealed class RazerTransport : IDisposable
             {
                 Thread.Sleep(AnswerDelay);
                 Array.Clear(wire);
-                _device.ReceiveFeature(wire);
+                if (_device.ReceiveFeature(wire) != wire.Length)
+                    throw new IOException($"{Path}: incomplete control report.");
                 var answer = RazerReport.Parse(wire.AsSpan(1));
                 if (answer.Status != ReportStatus.Busy || attempt >= BusyRetries)
                     return answer;
@@ -41,5 +45,14 @@ public sealed class RazerTransport : IDisposable
         }
     }
 
-    public void Dispose() => _device.Dispose();
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _device.Dispose();
+        }
+    }
 }
