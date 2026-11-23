@@ -178,22 +178,21 @@ public sealed partial class MainViewModel : ObservableObject
 
             var current = Devices.ToList();
             // One tab per device model; a second identical device shares the tab and the settings.
-            foreach (var info in devices.GroupBy(d => d.Key).Select(g => g.First()))
+            foreach (var group in devices.GroupBy(d => d.Key))
             {
-                var tab = current.FirstOrDefault(t => t.Key == info.Key);
+                var units = group.ToArray();
+                var tab = current.FirstOrDefault(t => t.Key == group.Key);
                 if (tab != null)
                 {
-                    bool endpointChanged = tab.Info.Port != info.Port || tab.Info.ProductId != info.ProductId ||
-                        tab.Info.ControlNode != info.ControlNode || tab.Info.Firmware != info.Firmware || tab.Info.Serial != info.Serial ||
-                        tab.Info.OnboardProfile != info.OnboardProfile;
-                    tab.Info = info;
+                    bool endpointChanged = tab.SetAttachedUnits(units);
                     tab.RefreshOnboard();
                     if (endpointChanged)
                         _ = tab.ReloadAsync();
                     current.Remove(tab);
                     continue;
                 }
-                tab = new DeviceViewModel(info, this);
+                tab = new DeviceViewModel(units[0], this);
+                tab.SetAttachedUnits(units);
                 // Devices sit between SYNAPSE and LINKED GAMES, as in Synapse.
                 Tabs.Insert(Tabs.IndexOf(LinkedGames), tab);
                 _ = tab.ReloadAsync();

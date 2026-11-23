@@ -124,6 +124,15 @@ public sealed class DaemonClient : IAsyncDisposable
     public async Task<DeviceState?> GetDeviceStateAsync(string device) =>
         JsonSerializer.Deserialize(await CallStringAsync("GetDeviceState", device).ConfigureAwait(false), ClientJson.Default.DeviceState);
 
+    public async Task<DeviceState?> GetUnitStateAsync(DeviceInfo device)
+    {
+        var connection = Connection;
+        var message = Build(connection, "GetUnitState", "ssss", [device.Key, device.Port, device.ProductId, device.Serial ?? ""]);
+        string json = await connection.CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadString(), null)
+            .ConfigureAwait(false);
+        return JsonSerializer.Deserialize(json, ClientJson.Default.DeviceState);
+    }
+
     public async Task<OnboardResult> ManageOnboardAsync(OnboardRequest request) =>
         BasiliskOnboard.ReadResult(await CallStringAsync("Onboard", BasiliskOnboard.WriteRequest(request)).ConfigureAwait(false));
 

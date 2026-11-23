@@ -11,7 +11,7 @@
             <Setter Property="Padding" Value="10,4" />
         </Style>
     </UserControl.Styles>
-    <Grid RowDefinitions="Auto,*">
+    <Grid RowDefinitions="Auto,Auto,*">
         <!-- Header, as Synapse 4 has it: profile and keymap on the left, the pages in the middle. -->
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,*" Height="44" Margin="0,2,0,6">
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" VerticalAlignment="Center"
@@ -80,8 +80,23 @@
             </StackPanel>
         </Grid>
 
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,310,*" ColumnSpacing="12" Margin="16,0,16,8"
+              IsVisible="{Binding !IsOnboardPage}">
+            <TextBlock Classes="caption" Text="Inspect unit" VerticalAlignment="Center" />
+            <ComboBox Name="InspectedUnitBox" ItemsSource="{Binding UnitChoices}" SelectedItem="{Binding InspectedUnit, Mode=TwoWay}"
+                      HorizontalAlignment="Stretch" AutomationProperties.Name="Inspect unit">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:DeviceUnitChoice">
+                        <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Name="DeviceUnitScope" Classes="caption" Grid.Column="2" Text="{Binding UnitScope}"
+                       VerticalAlignment="Center" TextWrapping="Wrap" />
+        </Grid>
+
         <!-- CUSTOMIZE -->
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,*"
+        <Grid Grid.Row="2" ColumnDefinitions="Auto,*"
               IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CUSTOMIZE}">
             <Border Grid.Column="0" Width="340" Background="{StaticResource SideBrush}" IsVisible="{Binding ShowKeyList}">
                 <DockPanel>
@@ -271,7 +286,7 @@
         </Grid>
 
         <!-- LIGHTING -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Lighting}" x:DataType="vm:LightingViewModel">
                 <!-- Left column: Brightness, Switch off lighting. -->
                 <StackPanel>
@@ -365,7 +380,7 @@
         </ScrollViewer>
 
         <!-- PERFORMANCE -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Performance}" x:DataType="vm:PerformanceViewModel">
                 <Border Classes="card" Width="620">
                     <StackPanel Spacing="12">
@@ -420,7 +435,7 @@
         </ScrollViewer>
 
         <!-- CALIBRATION -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CALIBRATION}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CALIBRATION}">
             <StackPanel HorizontalAlignment="Center" Margin="20,8" Spacing="12" DataContext="{Binding Calibration}" x:DataType="vm:CalibrationViewModel">
                 <Border Background="#2A2A2A" Padding="20,14" Width="900">
                     <StackPanel Spacing="6">
@@ -445,11 +460,11 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Grid Grid.Row="1" IsVisible="{Binding IsOnboardPage}">
+        <Grid Grid.Row="2" IsVisible="{Binding IsOnboardPage}">
             <views:OnboardEditorView DataContext="{Binding Onboard}" />
         </Grid>
 
-        <ScrollViewer Name="DeviceHealthPanel" Grid.Row="1"
+        <ScrollViewer Name="DeviceHealthPanel" Grid.Row="2"
                       IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=HEALTH}">
             <StackPanel Margin="24,16" MaxWidth="940" Spacing="12" DataContext="{Binding Health}" x:DataType="vm:DeviceHealth">
                 <TextBlock Classes="heading" Text="DEVICE HEALTH AND COMPATIBILITY" />
@@ -503,7 +518,7 @@
         </ScrollViewer>
 
         <!-- POWER -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Power}" x:DataType="vm:PowerViewModel">
                 <Border Classes="card" Width="440">
                     <StackPanel Spacing="12">

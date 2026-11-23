@@ -28,6 +28,7 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
           <method name="ExportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="profileId"/><arg direction="out" type="s" name="json"/></method>
           <method name="ImportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/><arg direction="in" type="b" name="replace"/><arg direction="in" type="b" name="allowLaunch"/></method>
           <method name="GetDeviceState"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
+          <method name="GetUnitState"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="port"/><arg direction="in" type="s" name="productId"/><arg direction="in" type="s" name="serial"/><arg direction="out" type="s" name="json"/></method>
           <method name="Onboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
           <method name="BackupOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="backup"/></method>
           <method name="RestoreOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
@@ -169,6 +170,13 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
             case "GetDeviceState":
             {
                 var state = _devices.ReadState(DeviceKey(reader.ReadString()));
+                ReplyString(context, state == null ? "null" : System.Text.Json.JsonSerializer.Serialize(state, DeviceStateJson.Default.DeviceState));
+                break;
+            }
+            case "GetUnitState":
+            {
+                var state = _devices.ReadUnitState(DeviceKey(reader.ReadString()), reader.ReadString(),
+                    DeviceKey(reader.ReadString()), reader.ReadString());
                 ReplyString(context, state == null ? "null" : System.Text.Json.JsonSerializer.Serialize(state, DeviceStateJson.Default.DeviceState));
                 break;
             }

@@ -57,6 +57,7 @@ public sealed record KeymapItem(int Index, string Name)
 }
 
 public sealed record KeyGroup(string Title, IReadOnlyList<KeyRowViewModel> Keys);
+public sealed record DeviceUnitChoice(string Port, string ProductId, string? Serial, string Label);
 
 /// <summary>A line of the key list: a group heading, or one key or two side by side (Synapse 4 runs a long group
 /// down two columns).</summary>
@@ -89,6 +90,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         if (info.Connection == "bluetooth" && productId == DeviceCatalogue.BasiliskV4ProBluetooth)
             productId = DeviceCatalogue.BasiliskV4ProReceiver;
         Model = info.Known ? DeviceCatalogue.Default.Find(productId) : null;
+        SetAttachedUnits([info]);
         RebuildControls();
         _controlsReady = true;
         RebuildFirmwareButtons();
@@ -146,6 +148,65 @@ public sealed partial class DeviceViewModel : TabViewModel
 
     [ObservableProperty]
     public partial DeviceInfo Info { get; set; }
+
+    IReadOnlyList<DeviceInfo> _attachedUnits = [];
+    bool _replacingUnits;
+    long _deviceReadRequest;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UnitScope))]
+    public partial IReadOnlyList<DeviceUnitChoice> UnitChoices { get; private set; } = [];
+
+    [ObservableProperty] public partial DeviceUnitChoice? InspectedUnit { get; set; }
+
+    public string UnitScope => UnitChoices.Count > 1
+        ? $"Profile edits are shared by all {UnitChoices.Count} connected units."
+        : "Profile edits are saved for this model.";
+
+    internal bool SetAttachedUnits(IReadOnlyList<DeviceInfo> units)
+    {
+        var previous = Info;
+        var next = units.FirstOrDefault(unit => unit.Port == previous.Port && unit.ProductId == previous.ProductId &&
+            (previous.Serial == null || unit.Serial == previous.Serial));
+        if (next == null && !string.IsNullOrEmpty(previous.Serial))
+        {
+            var matching = units.Where(unit => unit.Serial == previous.Serial).Take(2).ToArray();
+            if (matching.Length == 1)
+                next = matching[0];
+        }
+        next ??= units[0];
+
+        _attachedUnits = units;
+        var choices = units.Select(unit => new DeviceUnitChoice(unit.Port, unit.ProductId, unit.Serial,
+            unit.Serial is { Length: > 0 } serial
+                ? $"{DeviceHealth.ConnectionLabel(unit)} · {serial} · {unit.Port}"
+                : $"{DeviceHealth.ConnectionLabel(unit)} · {unit.Port}")).ToArray();
+        _replacingUnits = true;
+        try
+        {
+            if (!UnitChoices.SequenceEqual(choices))
+                UnitChoices = choices;
+            InspectedUnit = UnitChoices.First(choice => choice.Port == next.Port && choice.ProductId == next.ProductId);
+        }
+        finally
+        {
+            _replacingUnits = false;
+        }
+        Info = next;
+        return !SameBatteryEndpoint(previous, next) || previous.ProductId != next.ProductId ||
+            previous.Firmware != next.Firmware || previous.OnboardProfile != next.OnboardProfile;
+    }
+
+    partial void OnInspectedUnitChanged(DeviceUnitChoice? value)
+    {
+        if (_replacingUnits || value == null)
+            return;
+        var target = _attachedUnits.FirstOrDefault(unit => unit.Port == value.Port && unit.ProductId == value.ProductId && unit.Serial == value.Serial);
+        if (target == null || ReferenceEquals(target, Info))
+            return;
+        Info = target;
+        _ = ReadDeviceAsync();
+    }
 
     public DeviceModel? Model { get; }
     public string Key => Info.Key;
@@ -506,8 +567,8 @@ public sealed partial class DeviceViewModel : TabViewModel
         }
         try
         {
-            var read = readUsb ?? _main.Client.GetDeviceStateAsync;
-            if (await read(info.Key).ConfigureAwait(false) is { } state && state.BatteryPercent != null)
+            var read = readUsb == null ? _main.Client.GetUnitStateAsync(info) : readUsb(info.Key);
+            if (await read.ConfigureAwait(false) is { } state && state.BatteryPercent != null)
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     if (_batteryRequest == request)
@@ -554,10 +615,17 @@ public sealed partial class DeviceViewModel : TabViewModel
         OnPropertyChanged(nameof(Health));
         if (!_controlsReady)
             return;
-        if (!SameBatteryEndpoint(oldValue, newValue))
+        bool endpointChanged = !SameBatteryEndpoint(oldValue, newValue) || oldValue.ProductId != newValue.ProductId;
+        if (endpointChanged)
         {
             _batteryRequest++;
+            _deviceReadRequest++;
             ShowBattery(null, null);
+            _deviceDefaults = null;
+            _devicePower = null;
+            _deviceScroll = null;
+            _deviceWheelMode = null;
+            _liftOff = -1;
         }
         bool bluetoothChanged = (oldValue.Connection == "bluetooth") != IsBluetooth;
         if (bluetoothChanged || UsingGenericControls &&
@@ -582,6 +650,8 @@ public sealed partial class DeviceViewModel : TabViewModel
             OnPropertyChanged(nameof(HasScrollFirmware));
             OnPropertyChanged(nameof(HasPollingCard));
         }
+        if (endpointChanged)
+            Load(_settings);
     }
 
     IReadOnlyList<string> BuildPages()
@@ -692,22 +762,23 @@ public sealed partial class DeviceViewModel : TabViewModel
 
     /// <summary>Reads what the device itself is set to, so Performance and Power show real values before the user
     /// changes anything.</summary>
-    async Task ReadDeviceAsync()
+    internal async Task ReadDeviceAsync(Func<DeviceInfo, Task<DeviceState?>>? readUsb = null)
     {
         try
         {
-            var (info, batteryRequest) = await Dispatcher.UIThread.InvokeAsync(() => (Info, ++_batteryRequest));
+            var (info, batteryRequest, deviceRequest) = await Dispatcher.UIThread.InvokeAsync(() => (Info, ++_batteryRequest, ++_deviceReadRequest));
             if (info.Connection == "bluetooth")
             {
                 if (HasBattery)
                     await ReadBluetoothBatteryAsync(info.Port, batteryRequest, BluetoothBattery.ReadAsync).ConfigureAwait(false);
                 return;
             }
-            if (await _main.Client.GetDeviceStateAsync(info.Key).ConfigureAwait(false) is not { } state)
+            var read = readUsb ?? _main.Client.GetUnitStateAsync;
+            if (await read(info).ConfigureAwait(false) is not { } state)
                 return;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (!SameBatteryEndpoint(info, Info))
+                if (_deviceReadRequest != deviceRequest)
                     return;
                 // A keypad reports a polling rate and no stages; its rate is still the device's own value.
                 if (state.Stages is { Count: > 0 } || state.PollingRate > 0)

@@ -532,6 +532,21 @@ public sealed class DeviceManager : IDisposable
         return control?.ReadState();
     }
 
+    internal DeviceState? ReadUnitState(string key, string port, string productId, string serial)
+    {
+        lock (_refreshGate)
+        {
+            DeviceControl? control;
+            lock (_gate)
+            {
+                control = _devices.TryGetValue(port, out var device) && !device.Suppressed &&
+                    device.Key == key && device.ProductKey == productId && (device.Identity?.Serial ?? "") == serial
+                    ? device.Control : null;
+            }
+            return control?.ReadState();
+        }
+    }
+
     internal OnboardResult ManageOnboard(OnboardRequest request) =>
         WithOnboardDevice(request.Serial, (control, serial) =>
         {

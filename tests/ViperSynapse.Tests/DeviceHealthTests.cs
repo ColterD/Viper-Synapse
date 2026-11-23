@@ -129,6 +129,102 @@ public sealed class DeviceHealthTests
     }, CancellationToken.None);
 
     [Fact]
+    public Task Two_units_share_a_profile_but_health_and_state_select_one_endpoint() => HeadlessApp.Session.Dispatch(() =>
+    {
+        var directory = Directory.CreateTempSubdirectory("viper-health-units-");
+        try
+        {
+            using var manager = new DeviceManager(new SettingsStore(directory.FullName), new Sink());
+            var wired = new HidrawNode("/dev/wired", 0x1532, 0x00e2, 3, "Basilisk", "usb-a/input3");
+            var receiver = new HidrawNode("/dev/receiver", 0x1532, 0x00e3, 3, "Basilisk", "usb-b/input3");
+            var first = new BasiliskOnboardTests.Firmware { Serial = "WIRED01" };
+            var second = new BasiliskOnboardTests.Firmware { Serial = "RADIO02" };
+            manager.Refresh([wired, receiver], [], _ => true,
+                path => new RazerTransport(path == wired.DevicePath ? first : second) { AnswerDelay = TimeSpan.Zero });
+            var units = JsonSerializer.Deserialize(manager.DevicesJson(), ClientJson.Default.ListDeviceInfo)!;
+            Assert.Equal(2, units.Count);
+            Assert.Equal(units[0].Key, units[1].Key);
+            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+            var model = new DeviceViewModel(units[0], main) { SelectedPage = DeviceViewModel.HealthPage };
+            model.SetAttachedUnits(units);
+            var view = new DeviceView { DataContext = model };
+            var window = new Window { Width = 1080, Height = 680, Content = view };
+            window.Show();
+            try
+            {
+                var chooser = Assert.IsType<ComboBox>(view.FindControl<ComboBox>("InspectedUnitBox"));
+                Assert.Contains("WIRED01", Assert.IsType<DeviceUnitChoice>(chooser.SelectedItem).Label);
+                Assert.Contains("all 2 connected units", view.FindControl<TextBlock>("DeviceUnitScope")!.Text!);
+                chooser.SelectedIndex = 1;
+                Dispatcher.UIThread.RunJobs();
+                Assert.Equal("RADIO02", model.Info.Serial);
+                Assert.Equal("HyperSpeed", view.FindControl<TextBlock>("HealthConnection")!.Text);
+                model.SetAttachedUnits(units.AsEnumerable().Reverse().ToArray());
+                Dispatcher.UIThread.RunJobs();
+                Assert.Contains("RADIO02", Assert.IsType<DeviceUnitChoice>(chooser.SelectedItem).Label);
+
+                int firstRequests = first.Requests.Count, secondRequests = second.Requests.Count;
+                Assert.Null(manager.ReadUnitState(model.Key, model.Info.Port, model.Info.ProductId, "WIRED01"));
+                Assert.Equal(secondRequests, second.Requests.Count);
+                Assert.NotNull(manager.ReadUnitState(model.Key, model.Info.Port, model.Info.ProductId, model.Info.Serial!));
+                Assert.Equal(firstRequests, first.Requests.Count);
+                Assert.True(second.Requests.Count > secondRequests);
+
+                manager.Refresh([wired], [], _ => true, _ => throw new InvalidOperationException("The wired endpoint should stay open"));
+                firstRequests = first.Requests.Count;
+                Assert.Null(manager.ReadUnitState(model.Key, model.Info.Port, model.Info.ProductId, model.Info.Serial!));
+                Assert.Equal(firstRequests, first.Requests.Count);
+                model.SetAttachedUnits(JsonSerializer.Deserialize(manager.DevicesJson(), ClientJson.Default.ListDeviceInfo)!);
+                Dispatcher.UIThread.RunJobs();
+                Assert.Equal("WIRED01", model.Info.Serial);
+                Assert.Contains("WIRED01", Assert.IsType<DeviceUnitChoice>(chooser.SelectedItem).Label);
+                Assert.Equal("Wired USB", view.FindControl<TextBlock>("HealthConnection")!.Text);
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }, CancellationToken.None);
+
+    [Fact]
+    public Task A_late_read_from_an_old_unit_cannot_replace_the_selected_units_live_state() =>
+        HeadlessApp.Session.Dispatch<bool>(async () =>
+        {
+            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+            var previous = new DeviceInfo("00e3", "00e3", "Razer Basilisk V4 Pro", "mouse", "usb-first",
+                true, true, "FIRST", "v1.00", "/dev/emulated-first", [], false, null, Connection: "hyperspeed");
+            var current = previous with { Port = "usb-second", ControlNode = "/dev/emulated-second", Serial = "SECOND" };
+            var device = new DeviceViewModel(previous, main);
+            var laterReply = new TaskCompletionSource<ViperSynapse.App.Services.DeviceState?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var started = new TaskCompletionSource<DeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var oldRead = device.ReadDeviceAsync(info =>
+            {
+                started.SetResult(info);
+                return laterReply.Task;
+            });
+            Assert.Equal("FIRST", (await started.Task).Serial);
+            Assert.True(device.SetAttachedUnits([current]));
+            DeviceInfo? target = null;
+            await device.ReadDeviceAsync(info =>
+            {
+                target = info;
+                return Task.FromResult<ViperSynapse.App.Services.DeviceState?>(new(null, 0, 0, 81, false));
+            });
+            Assert.Equal("SECOND", target?.Serial);
+            Assert.Equal(81, device.BatteryPercent);
+            laterReply.SetResult(new(null, 0, 0, 30, true));
+            await oldRead;
+            Assert.Equal(81, device.BatteryPercent);
+            Assert.False(device.Charging);
+            return true;
+        }, CancellationToken.None);
+
+    [Fact]
     public Task An_older_device_refresh_does_not_replace_newer_health() => HeadlessApp.Session.Dispatch<bool>(async () =>
     {
         var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);

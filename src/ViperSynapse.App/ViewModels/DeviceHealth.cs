@@ -14,13 +14,7 @@ internal sealed record DeviceHealth(string Model, string Connection, string Cont
     internal static DeviceHealth From(DeviceInfo info, DeviceModel? model, bool genericControls)
     {
         bool bluetoothLimited = info.Connection == "bluetooth";
-        string connection = info.Connection switch
-        {
-            "wired" => "Wired USB",
-            "hyperspeed" => "HyperSpeed",
-            "bluetooth" => "Bluetooth",
-            _ => info.Transport switch { "usb" => "USB", "bluetooth" => "Bluetooth", _ => "Unknown" },
-        };
+        string connection = ConnectionLabel(info);
         var control = ControlAccess(info, bluetoothLimited);
         var input = InputAccess(info, genericControls);
         bool basilisk = model?.ProductId is DeviceCatalogue.BasiliskV4ProWired or DeviceCatalogue.BasiliskV4ProReceiver or DeviceCatalogue.BasiliskV4ProBluetooth;
@@ -62,6 +56,14 @@ internal sealed record DeviceHealth(string Model, string Connection, string Cont
                 : "Viper does not support this feature on this model.", "");
         }
     }
+
+    internal static string ConnectionLabel(DeviceInfo info) => info.Connection switch
+    {
+        "wired" => "Wired USB",
+        "hyperspeed" => "HyperSpeed",
+        "bluetooth" => "Bluetooth",
+        _ => info.Transport switch { "usb" => "USB", "bluetooth" => "Bluetooth", _ => "Unknown" },
+    };
 
     static (string Status, string Reason) ControlAccess(DeviceInfo info, bool bluetoothLimited)
     {

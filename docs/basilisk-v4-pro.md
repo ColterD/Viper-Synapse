@@ -16,6 +16,8 @@ The checked-in replay tests exercise the feature-report envelope and exact comma
 
 Open **Health** on the device tab to see the detected model, connection, and feature availability. The **Access** column shows whether Viper has the interface it needs. **Verification** states what was tested for that feature and connection, such as a physical DPI-table read or an emulated restore. **Detected** means Linux listed an input interface and the service will check access when it starts remapping.
 
+Use **Inspect unit** to select which connected mouse supplies Health and live hardware readings. Local profile edits apply to every connected unit that shares the model profile. The **Onboard** page has a separate serial selector for operations that write to one mouse.
+
 ## Onboard profiles and buttons
 
 Open **Onboard** in the Basilisk device tab over wired USB or HyperSpeed. Choose the mouse by serial if several are connected. The page shows the active slot separately from the slot you are inspecting. Activate a slot before changing its buttons. To edit a binding, select the button and layer, then choose a key and any modifiers and select **Assign key**. **Read assignment** shows the stored function and indicates when Hypershift inherits it from the normal layer.
