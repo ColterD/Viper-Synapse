@@ -128,6 +128,31 @@ public class BasiliskOnboardTests
     }
 
     [Fact]
+    public void Every_onboard_mutation_requires_a_verified_serial_even_for_one_mouse()
+    {
+        var root = Directory.CreateTempSubdirectory("viper-onboard-target-");
+        try
+        {
+            var firmware = new Firmware { Serial = "FIRST" };
+            using var manager = new DeviceManager(new SettingsStore(root.FullName), new Sink());
+            manager.Refresh([new("/dev/raw1", 0x1532, 0x00E2, 3, "Basilisk", "usb-a/input3")],
+                [], _ => true, _ => new RazerTransport(firmware) { AnswerDelay = TimeSpan.Zero });
+            Assert.Equal("FIRST", manager.ManageOnboard(new(OnboardOperation.List)).Serial);
+            Assert.Equal("FIRST", manager.ManageOnboard(new(OnboardOperation.ReadBinding, 2, 0x39)).Serial);
+            int requestsBeforeMutations = firmware.Requests.Count;
+            foreach (var operation in Enum.GetValues<OnboardOperation>().Where(operation =>
+                operation is not (OnboardOperation.List or OnboardOperation.ReadBinding)))
+                Assert.Throws<InvalidDataException>(() => manager.ManageOnboard(new(operation, 2, 0x39,
+                    Usage: 0x68, Name: "Work", ConfirmDelete: true)));
+            Assert.Equal(requestsBeforeMutations, firmware.Requests.Count);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void Unsupported_buttons_and_inactive_slot_writes_are_rejected()
     {
         var receiver = new Firmware();

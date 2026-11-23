@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ViperSynapse.Core.Bindings;
+using ViperSynapse.Core.Protocol;
 
 namespace ViperSynapse.Service;
 
@@ -13,6 +14,8 @@ namespace ViperSynapse.Service;
 public sealed class SettingsStore(string root)
 {
     readonly Lock _gate = new();
+    readonly string _epoch = Guid.NewGuid().ToString("N");
+    readonly Dictionary<string, long> _revisions = new(StringComparer.Ordinal);
 
     public string Root { get; } = root;
 
@@ -26,6 +29,43 @@ public sealed class SettingsStore(string root)
 
     string DevicePath(string deviceKey) => Path.Combine(Root, "devices", deviceKey + ".json");
     string MacrosPath => Path.Combine(Root, "macros.json");
+
+    string Revision(string path) => $"{_epoch}:{_revisions.GetValueOrDefault(path)}";
+
+    void AdvanceRevision(string path) => _revisions[path] = _revisions.GetValueOrDefault(path) + 1;
+
+    SettingsSnapshot Snapshot(string path, Func<string> read)
+    {
+        lock (_gate)
+        {
+            var json = read();
+            return new(Revision(path), json);
+        }
+    }
+
+    SettingsCommitResult Commit(string path, string? expected, Func<string> serialize)
+    {
+        lock (_gate)
+        {
+            if (expected != null && expected != Revision(path))
+                return new(Revision(path), false);
+            Save(path, serialize());
+            return new(Revision(path), true);
+        }
+    }
+
+    internal SettingsSnapshot DeviceSnapshot(string key) => Snapshot(DevicePath(key), () => SettingsJson.Write(LoadDevice(key)));
+    internal SettingsSnapshot MacrosSnapshot() => Snapshot(MacrosPath, () => SettingsJson.Write(LoadMacros()));
+    internal SettingsSnapshot ShortcutsSnapshot() => Snapshot(ShortcutsPath, () => SettingsJson.Write(LoadShortcuts()));
+
+    internal SettingsCommitResult CommitDevice(string key, string? expected, DeviceSettings settings) =>
+        Commit(DevicePath(key), expected, () => SettingsJson.Write(settings));
+
+    internal SettingsCommitResult CommitMacros(string? expected, MacroLibrary macros) =>
+        Commit(MacrosPath, expected, () => SettingsJson.Write(macros));
+
+    internal SettingsCommitResult CommitShortcuts(string? expected, ShortcutList shortcuts) =>
+        Commit(ShortcutsPath, expected, () => SettingsJson.Write(shortcuts));
 
     /// <summary>A device seen for the first time gets default settings, saved at once so their ids stay put.</summary>
     public DeviceSettings LoadDevice(string deviceKey) => Load(DevicePath(deviceKey), SettingsJson.ReadSettings, () =>
@@ -71,13 +111,17 @@ public sealed class SettingsStore(string root)
                 try
                 {
                     File.Move(pending, path, overwrite: true);
+                    AdvanceRevision(path);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
                     if (hadMacros)
                         SaveMacros(local);
                     else
+                    {
                         File.Delete(MacrosPath);
+                        AdvanceRevision(MacrosPath);
+                    }
                     throw;
                 }
             }
@@ -153,6 +197,7 @@ public sealed class SettingsStore(string root)
         lock (_gate)
         {
             File.Move(Stage(path, json), path, overwrite: true);
+            AdvanceRevision(path);
         }
     }
 

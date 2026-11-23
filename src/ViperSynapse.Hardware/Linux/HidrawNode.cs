@@ -9,6 +9,8 @@ public sealed record HidrawNode(string DevicePath, ushort VendorId, ushort Produ
     public const ushort UsbBus = 0x0003, BluetoothBus = 0x0005;
     public ushort Bus { get; init; } = UsbBus;
     public string Unique { get; init; } = "";
+    /// <summary>The sysfs endpoint identity, which changes when the kernel reuses the same hidraw path.</summary>
+    public string? InstancePath { get; init; }
 
     /// <summary>The USB port without its interface, or the Bluetooth peer address.</summary>
     public string PortPath => PhysicalPort(Bus, Phys, Unique);
@@ -37,10 +39,17 @@ public sealed record HidrawNode(string DevicePath, ushort VendorId, ushort Produ
         {
             var node = FromUevent(Path.Combine(devRoot, Path.GetFileName(dir)), ReadOrEmpty(Path.Combine(dir, "device", "uevent")));
             if (node != null)
-                nodes.Add(node);
+                nodes.Add(node with { InstancePath = ResolveInstance(dir) });
         }
         nodes.Sort((a, b) => string.CompareOrdinal(a.Phys, b.Phys));
         return nodes;
+    }
+
+    static string? ResolveInstance(string path)
+    {
+        try { return Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>Parses the HID device's uevent: HID_ID=0003:00001532:000002EB, HID_NAME=…, HID_PHYS=usb-…/input2.</summary>

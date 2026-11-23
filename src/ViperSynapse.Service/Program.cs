@@ -28,18 +28,7 @@ static class Program
         using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, c => { c.Cancel = true; stop.Cancel(); });
         using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, c => { c.Cancel = true; stop.Cancel(); });
 
-        UinputDevice output;
-        try
-        {
-            output = UinputDevice.Create("Viper Synapse virtual input");
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine($"Cannot make the virtual keyboard: {e.Message}. Install the Viper Synapse udev rule.");
-            return 2;
-        }
-        using var _ = output;
-        using var devices = new DeviceManager(new SettingsStore(root), output);
+        using var devices = new DeviceManager(new SettingsStore(root), () => UinputDevice.Create("Viper Synapse virtual input"));
         using var bus = new DaemonBus(devices, () =>
         {
             // Grabbed devices are heard through the virtual device, which carries what they send.
@@ -70,23 +59,39 @@ static class Program
 
         // Plugging and unplugging shows up as nodes coming and going in /dev/input.
         var pending = 0;
-        void Changed()
+        var retryControl = 0;
+        var stopping = stop.Token;
+        void Changed(bool permissionChanged)
         {
-            if (Interlocked.Exchange(ref pending, 1) == 1)
-                return;
-            // udev needs a moment to set the permissions on a new node.
-            Task.Delay(500).ContinueWith(_ => { Volatile.Write(ref pending, 0); devices.Refresh(); }, TaskScheduler.Default);
+            if (permissionChanged)
+                Interlocked.Exchange(ref retryControl, 1);
+            if (Interlocked.Exchange(ref pending, 1) == 0)
+                _ = RefreshAfterUdevAsync();
         }
-        using var watcher = WatchInputNodes("/dev/input", (_, _) => Changed());
-        using var hidrawWatcher = WatchInputNodes("/dev", (_, _) => Changed(), "hidraw*");
+        async Task RefreshAfterUdevAsync()
+        {
+            // udev needs a moment to set the permissions on a new node.
+            try
+            {
+                await Task.Delay(500, stopping).ConfigureAwait(false);
+                Volatile.Write(ref pending, 0);
+                devices.Refresh(forceControlRetry: Interlocked.Exchange(ref retryControl, 0) != 0);
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"Could not refresh devices after a udev change: {e.Message}");
+            }
+        }
+        using var watcher = Directory.Exists("/dev/input") ? WatchInputNodes("/dev/input", (_, _) => Changed(false)) : null;
+        using var hidrawWatcher = WatchInputNodes("/dev", (_, e) => Changed(e.ChangeType == WatcherChangeTypes.Changed), "hidraw*");
 
         // A sleeping mouse can return while the receiver's Linux nodes remain present.
         using var receiverPoll = new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
             while (await receiverPoll.WaitForNextTickAsync(stop.Token).ConfigureAwait(false))
-                if (devices.HasBasiliskUsbEndpoints)
-                    Changed();
+                devices.RefreshReceivers();
         }
         catch (OperationCanceledException) { }
         return 0;

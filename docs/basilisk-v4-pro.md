@@ -44,22 +44,23 @@ If a write fails, Viper attempts to restore the original values and verifies the
 
 ### CLI
 
-With the Viper service running and one wired or HyperSpeed Basilisk connected, list the slots before making changes. Add `--serial SERIAL` before the subcommand when more than one mouse is connected.
+With the Viper service running and one wired or HyperSpeed Basilisk connected, list the slots before making changes. Copy the serial from the result and pass it before each command that changes the mouse. If more than one Basilisk is connected, pass the serial to the read commands too.
 
 ```sh
 viper-cli onboard list
-viper-cli onboard create 2
-viper-cli onboard rename 2 "Work"
-viper-cli onboard select 2
+serial='YOUR-MOUSE-SERIAL'
+viper-cli onboard --serial "$serial" create 2
+viper-cli onboard --serial "$serial" rename 2 "Work"
+viper-cli onboard --serial "$serial" select 2
 viper-cli onboard buttons
-viper-cli onboard key 2 39 normal 68
-viper-cli onboard read 2 39 normal
-viper-cli onboard restore 2 39
+viper-cli onboard --serial "$serial" key 2 39 normal 68
+viper-cli onboard --serial "$serial" read 2 39 normal
+viper-cli onboard --serial "$serial" restore 2 39
 ```
 
 In this example, hexadecimal HID usage `68` assigns F13 to the Hypershift clutch in slot 2. Reassigning the normal-layer clutch takes away its Hypershift function until you restore it. The supported buttons are M1 profile cycle (`0E`), the clutch (`39`), DPI cycle (`60`), scroll mode (`6A`), and the front side button (`80`). The front side button's firmware default is disabled. Restoring it does not launch Razer's AI Prompt Master.
 
-Writes target the active slot and confirm the exact binding and layer. A Hypershift read may report the normal-layer assignment as inherited. The `restore` command restores the documented normal-layer function. To remove an inactive slot, run `viper-cli onboard delete SLOT --confirm`. The service protects slot 1 and the active slot.
+Writes target the active slot and confirm the exact binding and layer. A Hypershift read may report the normal-layer assignment as inherited. The `restore` command restores the documented normal-layer function. To remove an inactive slot, run `viper-cli onboard --serial SERIAL delete SLOT --confirm`. The service protects slot 1 and the active slot.
 
 The public protocol source describes slot listing (`05/81`), creation (`05/02`), deletion (`05/03`), and selection (`05/04`). Button reads and writes use `02/8C` and `02/0C` with the slot, control ID, and layer. Viper confirms these operations through readback. The support claims here describe emulated verification of Viper's implementation. [Synapsex onboard commands and button IDs](https://github.com/iMacnucintosh/synapsex/blob/1d9d23352b7a87795c04ae04b5ab5c89d00ee933/crates/razer-protocol/src/onboard.rs) · [Button report layouts](https://github.com/iMacnucintosh/synapsex/blob/1d9d23352b7a87795c04ae04b5ab5c89d00ee933/crates/razer-protocol/src/commands.rs) · [Razer control list](https://www.razer.com/gaming-mice/razer-basilisk-v4-pro)
 
