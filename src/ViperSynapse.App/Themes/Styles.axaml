@@ -1,28 +1,39 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ViperSynapse.App.Controls">
 
     <Style Selector="Window">
         <Setter Property="Background" Value="{StaticResource PageBrush}" />
-        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontSize" Value="14" />
+    </Style>
+
+    <Style Selector="controls|DeviceDrawing">
+        <Setter Property="AccentColor" Value="{DynamicResource AccentColor}" />
+    </Style>
+    <Style Selector="controls|StickView">
+        <Setter Property="AccentColor" Value="{DynamicResource AccentColor}" />
+    </Style>
+    <Style Selector="Border.valueBubble">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <Style Selector="TextBlock.caption">
-        <Setter Property="FontSize" Value="10" />
+        <Setter Property="FontSize" Value="12" />
         <Setter Property="Foreground" Value="{StaticResource CaptionBrush}" />
-        <Setter Property="LetterSpacing" Value="0.4" />
+        <Setter Property="LetterSpacing" Value="0.2" />
     </Style>
     <Style Selector="TextBlock.green">
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="TextBlock.heading">
         <Setter Property="FontSize" Value="14" />
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         <Setter Property="LetterSpacing" Value="0.6" />
     </Style>
     <Style Selector="TextBlock.title">
         <Setter Property="FontSize" Value="13" />
         <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
-        <Setter Property="LetterSpacing" Value="1.2" />
+        <Setter Property="LetterSpacing" Value="0.5" />
     </Style>
 
     <!-- Top bar tabs: SYNAPSE, one per device, MACROS. The open one takes the page colour. -->
@@ -31,9 +42,9 @@
             <ControlTemplate>
                 <Border Name="Back" Background="Transparent" Padding="14,0" Height="32">
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Ellipse Name="Dot" Width="6" Height="6" Fill="{StaticResource GreenBrush}" IsVisible="False" />
-                        <ContentPresenter Name="Text" Content="{TemplateBinding Content}" Foreground="#9A9A9A"
-                                          FontSize="11" VerticalAlignment="Center" />
+                        <Ellipse Name="Dot" Width="6" Height="6" Fill="{DynamicResource AccentBrush}" IsVisible="False" />
+                        <ContentPresenter Name="Text" Content="{TemplateBinding Content}" Foreground="{StaticResource TextDimBrush}"
+                                          FontSize="12" VerticalAlignment="Center" />
                     </StackPanel>
                 </Border>
             </ControlTemplate>
@@ -58,16 +69,16 @@
             <ControlTemplate>
                 <Border Name="Back" Background="Transparent" CornerRadius="3" Padding="12,4">
                     <ContentPresenter Name="Text" Content="{TemplateBinding Content}" Foreground="#CCCCCC"
-                                      FontSize="11" HorizontalAlignment="Center" />
+                                      FontSize="12" HorizontalAlignment="Center" />
                 </Border>
             </ControlTemplate>
         </Setter>
     </Style>
     <Style Selector="RadioButton.pill:pointerover /template/ ContentPresenter#Text">
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="RadioButton.pill:checked /template/ Border#Back">
-        <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="RadioButton.pill:checked /template/ ContentPresenter#Text">
         <Setter Property="Foreground" Value="#000000" />
@@ -84,7 +95,7 @@
         </Setter>
     </Style>
     <Style Selector="RadioButton.segment:checked /template/ Border#Back">
-        <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="RadioButton.segment:checked /template/ ContentPresenter#Text">
         <Setter Property="Foreground" Value="#000000" />
@@ -111,7 +122,7 @@
 
     <!-- SAVE and CANCEL. -->
     <Style Selector="Button.save">
-        <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="#000000" />
         <Setter Property="CornerRadius" Value="2" />
         <Setter Property="FontSize" Value="12" />
@@ -122,7 +133,8 @@
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
     <Style Selector="Button.save:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="#5BE443" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Opacity" Value="0.88" />
         <Setter Property="Foreground" Value="#000000" />
     </Style>
     <Style Selector="Button.save:disabled /template/ ContentPresenter">
@@ -157,7 +169,7 @@
     </Style>
     <Style Selector="Button.flat:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <!-- The function rail of the binding flyout. -->
@@ -178,7 +190,7 @@
         <Setter Property="Background" Value="#111111" />
     </Style>
     <Style Selector="RadioButton.rail:checked /template/ ContentPresenter#Icon">
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <!-- Key list rows on the left of Customize. -->
@@ -238,7 +250,7 @@
         <Setter Property="Foreground" Value="#FFFFFF" />
     </Style>
     <Style Selector="Slider">
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <!-- Top bar tabs as a ListBox: the open tab takes the page colour and a green dot. -->
     <Style Selector="ListBox.topTabs">
@@ -252,8 +264,8 @@
         <Setter Property="BorderThickness" Value="1,1,1,0" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="MinHeight" Value="0" />
-        <Setter Property="Foreground" Value="#9A9A9A" />
-        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+        <Setter Property="FontSize" Value="12" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
     <Style Selector="ListBox.topTabs ListBoxItem:pointerover /template/ ContentPresenter">
@@ -265,7 +277,7 @@
         <Setter Property="Foreground" Value="#FFFFFF" />
     </Style>
     <Style Selector="ListBox.topTabs ListBoxItem:selected">
-        <Setter Property="BorderBrush" Value="#2E8F1E" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentOutlineBrush}" />
     </Style>
 
     <!-- Page tabs (CUSTOMIZE, LIGHTING, ...): the open one is a green pill with black text. -->
@@ -278,15 +290,15 @@
         <Setter Property="Margin" Value="4,0" />
         <Setter Property="MinHeight" Value="0" />
         <Setter Property="CornerRadius" Value="3" />
-        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontSize" Value="12" />
         <Setter Property="Foreground" Value="#CCCCCC" />
     </Style>
     <Style Selector="ListBox.pills ListBoxItem:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="ListBox.pills ListBoxItem:selected /template/ ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="#000000" />
     </Style>
 
@@ -302,7 +314,7 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="Foreground" Value="#9A9A9A" />
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
         <Setter Property="FontSize" Value="15" />
     </Style>
     <Style Selector="ListBox.rail ListBoxItem:pointerover /template/ ContentPresenter">
@@ -311,7 +323,7 @@
     </Style>
     <Style Selector="ListBox.rail ListBoxItem:selected /template/ ContentPresenter">
         <Setter Property="Background" Value="#111111" />
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <!-- View thumbnails under the device picture; the shown one has a green frame and a tick. -->
     <Style Selector="RadioButton.thumb">
@@ -327,7 +339,7 @@
         <Setter Property="BorderBrush" Value="#6A6A6A" />
     </Style>
     <Style Selector="RadioButton.thumb:checked /template/ Border#Frame">
-        <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderThickness" Value="2" />
     </Style>
     <!-- Setting cards on the Lighting, Performance and Power pages. -->
@@ -351,7 +363,7 @@
         <Setter Property="Foreground" Value="#CCCCCC" />
     </Style>
     <Style Selector="Button.stage.active">
-        <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="#000000" />
     </Style>
     <!-- Polling rate buttons: a row of boxes, the chosen one outlined green. -->
@@ -367,7 +379,7 @@
         <Setter Property="BorderThickness" Value="1" />
     </Style>
     <Style Selector="ListBox.rates ListBoxItem:selected">
-        <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="ListBox.rates ListBoxItem:selected /template/ ContentPresenter">
         <Setter Property="Background" Value="#14290F" />
@@ -393,7 +405,7 @@
     </Style>
     <Style Selector="ToggleButton.remap:checked /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <!-- Back, forward, refresh and help in the bar under the tabs. -->
     <Style Selector="Button.nav">
@@ -432,7 +444,7 @@
     </Style>
     <Style Selector="Button.gameTile:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="#1C1C1C" />
-        <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="Border.deviceTile">
         <Setter Property="Width" Value="220" />
@@ -442,7 +454,7 @@
     <!-- Underlined green links (Release Notes, the project page). -->
     <Style Selector="Button.link">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Cursor" Value="Hand" />
     </Style>
@@ -451,11 +463,11 @@
     </Style>
     <Style Selector="Button.link:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="#5BE443" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
     </Style>
     <!-- Dashboard: section headers, device cards, module cards. -->
     <Style Selector="TextBlock.section">
-        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontSize" Value="12" />
         <Setter Property="Foreground" Value="#CCCCCC" />
         <Setter Property="LetterSpacing" Value="0.6" />
     </Style>
@@ -497,7 +509,7 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="ListBox.segmentList ListBoxItem:selected /template/ ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="#000000" />
     </Style>
 </Styles>

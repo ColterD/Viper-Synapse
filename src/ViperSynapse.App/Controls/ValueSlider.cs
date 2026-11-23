@@ -39,15 +39,15 @@ public sealed class ValueSlider : Grid
     readonly Slider _slider = new() { IsSnapToTickEnabled = true, Margin = new Thickness(0) };
     readonly Border _bubble = new()
     {
-        Background = new SolidColorBrush(Color.Parse("#44D62C")),
+        Classes = { "valueBubble" },
         CornerRadius = new CornerRadius(2),
         Padding = new Thickness(6, 1),
         HorizontalAlignment = HorizontalAlignment.Left,
     };
-    readonly TextBlock _bubbleText = new() { Foreground = Brushes.Black, FontSize = 10 };
-    readonly TextBlock _min = new() { FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")) };
-    readonly TextBlock _mid = new() { FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")), HorizontalAlignment = HorizontalAlignment.Center };
-    readonly TextBlock _max = new() { FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")), HorizontalAlignment = HorizontalAlignment.Right };
+    readonly TextBlock _bubbleText = new() { Foreground = Brushes.Black, FontSize = 12 };
+    readonly TextBlock _min = new() { FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")) };
+    readonly TextBlock _mid = new() { FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")), HorizontalAlignment = HorizontalAlignment.Center };
+    readonly TextBlock _max = new() { FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")), HorizontalAlignment = HorizontalAlignment.Right };
     bool _syncing;
 
     public ValueSlider()

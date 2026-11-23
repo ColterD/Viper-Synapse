@@ -58,6 +58,9 @@ public sealed class App : Application
 
     void ShowWindow()
     {
+        if (_quitting)
+            return;
+
         if (_window == null)
         {
             _window = new MainWindow { DataContext = _main };
@@ -89,11 +92,15 @@ public sealed class App : Application
         if (_quitting)
             return;
         _quitting = true;
+        if (_window is not null)
+            _window.IsEnabled = false;
+        var pendingPreferences = _main!.Settings.PendingSave;
         _ = Task.Run(async () =>
         {
             try { await _client!.QuitServiceAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
             catch (Exception e) when (e is TimeoutException or InvalidOperationException or Tmds.DBus.Protocol.DBusErrorReplyException or Tmds.DBus.Protocol.DBusConnectionException) { }
             await _client!.DisposeAsync().ConfigureAwait(false);
+            await pendingPreferences.ConfigureAwait(false);
             Dispatcher.UIThread.Post(() => _desktop?.Shutdown());
         });
     }

@@ -16,7 +16,19 @@
         <!-- DASHBOARD: devices, then modules. -->
         <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowDashboard}">
             <StackPanel Margin="16,4,16,16" Spacing="8">
-                <TextBlock Classes="section" Text="▾  DEVICES" />
+                <TextBlock Classes="section" Text="Devices" />
+                <Border Name="DeviceSetupHint" Background="{StaticResource PanelBrush}" Padding="16"
+                        IsVisible="{Binding Devices.Count, Converter={x:Static views:Converters.IsEmpty}}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="heading" Text="No devices detected" />
+                        <TextBlock TextWrapping="Wrap"
+                                   Text="Connect your Razer device by USB or its wireless receiver, or pair it in Linux Bluetooth settings. When it appears here, select it and open Health to see what Viper can control." />
+                        <WrapPanel>
+                            <Button Content="Refresh devices" Command="{Binding RefreshCommand}" Margin="0,0,8,0" />
+                            <Button Classes="link" Content="Device setup and troubleshooting" Click="OpenDeviceSetup" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
                 <ItemsControl ItemsSource="{Binding Devices}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -31,41 +43,41 @@
                                         <Image Source="/Assets/icon.png" Width="64" Height="64"
                                                IsVisible="{Binding Photo, Converter={x:Static ObjectConverters.IsNull}}" />
                                     </Panel>
-                                    <TextBlock Text="{Binding Title}" FontSize="10" Foreground="#FFFFFF" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding ProfileName}" FontSize="10" Classes="green" HorizontalAlignment="Center" />
+                                    <TextBlock Text="{Binding Title}" FontSize="12" Foreground="#FFFFFF" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding ProfileName}" FontSize="12" Classes="green" HorizontalAlignment="Center" />
                                 </StackPanel>
                             </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <TextBlock Classes="section" Text="▾  MODULES" Margin="0,10,0,0" />
+                <TextBlock Classes="section" Text="Modules" Margin="0,10,0,0" />
                 <WrapPanel>
                     <Button Classes="moduleCard" Margin="0,0,8,8" Click="OpenLinkedGames">
                         <StackPanel Spacing="14">
                             <Panel Width="64" Height="64">
-                                <Ellipse Fill="{StaticResource GreenBrush}" />
+                                <Ellipse Fill="{DynamicResource AccentBrush}" />
                                 <TextBlock Text="◉◉" FontSize="22" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
-                            <TextBlock Text="LINKED GAMES" FontSize="10" Foreground="#FFFFFF" HorizontalAlignment="Center" />
+                            <TextBlock Text="Linked Games" FontSize="12" Foreground="#FFFFFF" HorizontalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button Classes="moduleCard" Margin="0,0,8,8" Click="OpenMacros">
                         <StackPanel Spacing="14">
                             <Panel Width="64" Height="64">
-                                <Ellipse Fill="{StaticResource GreenBrush}" />
+                                <Ellipse Fill="{DynamicResource AccentBrush}" />
                                 <TextBlock Text="M" FontSize="30" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
-                            <TextBlock Text="MACRO" FontSize="10" Foreground="#FFFFFF" HorizontalAlignment="Center" />
+                            <TextBlock Text="Macro" FontSize="12" Foreground="#FFFFFF" HorizontalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button Classes="moduleCard" Margin="0,0,8,8" Click="OpenSettings">
                         <StackPanel Spacing="14">
                             <Panel Width="64" Height="64">
-                                <Ellipse Fill="{StaticResource GreenBrush}" />
+                                <Ellipse Fill="{DynamicResource AccentBrush}" />
                                 <TextBlock Text="⚙" FontSize="30" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
-                            <TextBlock Text="SETTINGS" FontSize="10" Foreground="#FFFFFF" HorizontalAlignment="Center" />
+                            <TextBlock Text="Settings" FontSize="12" Foreground="#FFFFFF" HorizontalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </WrapPanel>
@@ -90,12 +102,12 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <Grid ColumnDefinitions="40,*,Auto" Height="44" Margin="12,0">
-                            <Panel Width="24" Height="24"><Ellipse Fill="{StaticResource GreenBrush}" /><TextBlock Text="◉◉" FontSize="8" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" /></Panel>
+                            <Panel Width="24" Height="24"><Ellipse Fill="{DynamicResource AccentBrush}" /><TextBlock Text="◉◉" FontSize="8" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" /></Panel>
                             <TextBlock Grid.Column="1" Text="Linked Games" Foreground="#FFFFFF" VerticalAlignment="Center" />
                             <TextBlock Grid.Column="2" Text="{Binding Version, StringFormat='Version {0}'}" Classes="caption" VerticalAlignment="Center" />
                         </Grid>
                         <Grid ColumnDefinitions="40,*,Auto" Height="44" Margin="12,0">
-                            <Panel Width="24" Height="24"><Ellipse Fill="{StaticResource GreenBrush}" /><TextBlock Text="M" FontSize="12" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" /></Panel>
+                            <Panel Width="24" Height="24"><Ellipse Fill="{DynamicResource AccentBrush}" /><TextBlock Text="M" FontSize="12" Foreground="Black" HorizontalAlignment="Center" VerticalAlignment="Center" /></Panel>
                             <TextBlock Grid.Column="1" Text="Macro" Foreground="#FFFFFF" VerticalAlignment="Center" />
                             <TextBlock Grid.Column="2" Text="{Binding Version, StringFormat='Version {0}'}" Classes="caption" VerticalAlignment="Center" />
                         </Grid>
@@ -111,7 +123,7 @@
                 <Border Background="#151515" Width="432" Padding="14,16" VerticalAlignment="Top" CornerRadius="2">
                     <StackPanel Spacing="12">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="SHORTCUTS" Foreground="{StaticResource GreenBrush}" FontSize="13" VerticalAlignment="Center" />
+                            <TextBlock Text="SHORTCUTS" Foreground="{DynamicResource AccentBrush}" FontSize="13" VerticalAlignment="Center" />
                             <Button Grid.Column="1" Classes="flat" Content="+" FontSize="20" FontWeight="Light" ToolTip.Tip="Add a shortcut" Command="{Binding AddCommand}" />
                         </Grid>
                         <TextBlock Foreground="#DDDDDD" FontSize="12" TextWrapping="Wrap"
@@ -123,7 +135,7 @@
                                         <Grid ColumnDefinitions="*,Auto,Auto">
                                             <StackPanel Spacing="2">
                                                 <TextBlock Text="{Binding Keys}" Foreground="#FFFFFF" FontSize="13" />
-                                                <TextBlock Foreground="#999999" FontSize="11">
+                                                <TextBlock Classes="caption">
                                                     <Run Text="{Binding Category}" /><Run Text=":  " /><Run Text="{Binding Function}" />
                                                 </TextBlock>
                                             </StackPanel>

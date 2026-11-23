@@ -131,9 +131,9 @@
                                                 <TextBlock Text="{Binding Number}" FontSize="12" Foreground="#CCCCCC" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                 <Rectangle Grid.Column="1" Fill="#4A4A4A" Margin="0,6" />
                                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="6,0" Spacing="0">
-                                                    <TextBlock Text="{Binding ListCategory}" FontSize="8" Foreground="#8A8A8A" />
+                                                    <TextBlock Text="{Binding ListCategory}" Classes="caption" />
                                                     <TextBlock Text="{Binding Value}" FontSize="12" TextTrimming="CharacterEllipsis"
-                                                               Foreground="{Binding Changed, Converter={x:Static views:Converters.ChangedBrush}}" />
+                                                               Classes.green="{Binding Changed}" />
                                                 </StackPanel>
                                             </Grid>
                                         </Button>
@@ -148,7 +148,7 @@
                                             <TextBlock Text="{Binding Where}" FontSize="9" Foreground="#CCCCCC" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             <Rectangle Grid.Column="1" Fill="#4A4A4A" Margin="0,6" />
                                             <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="6,0">
-                                                <TextBlock Text="{Binding Category}" FontSize="8" Foreground="#8A8A8A" />
+                                                <TextBlock Text="{Binding Category}" Classes="caption" />
                                                 <TextBlock Text="{Binding Value}" FontSize="12" Foreground="#FFFFFF" />
                                             </StackPanel>
                                         </Grid>
@@ -270,7 +270,7 @@
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <Button Classes="save" Content="APPLY TO THIS KEYMAP" Command="{Binding QuickRemapCommand}" IsVisible="{Binding !QuickRemapped}" />
                                         <Button Classes="cancel" Content="BACK TO KEYS" Command="{Binding UndoQuickRemapCommand}" IsVisible="{Binding QuickRemapped}" />
-                                        <TextBlock Text="On in this keymap" Foreground="{StaticResource GreenBrush}" FontSize="12" VerticalAlignment="Center"
+                                        <TextBlock Text="On in this keymap" Foreground="{DynamicResource AccentBrush}" FontSize="12" VerticalAlignment="Center"
                                                    IsVisible="{Binding QuickRemapped}" />
                                     </StackPanel>
                                 </StackPanel>
@@ -439,7 +439,7 @@
             <StackPanel HorizontalAlignment="Center" Margin="20,8" Spacing="12" DataContext="{Binding Calibration}" x:DataType="vm:CalibrationViewModel">
                 <Border Background="#2A2A2A" Padding="20,14" Width="900">
                     <StackPanel Spacing="6">
-                        <TextBlock Text="MOUSE MAT SURFACE CALIBRATION" Foreground="{StaticResource GreenBrush}" FontSize="22" HorizontalAlignment="Center" />
+                        <TextBlock Text="MOUSE MAT SURFACE CALIBRATION" Foreground="{DynamicResource AccentBrush}" FontSize="22" HorizontalAlignment="Center" />
                         <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
                                    Text="Your mouse tracks accurately out of the box. For another level of precision, set the distance at which it stops tracking when you lift it." />
                     </StackPanel>

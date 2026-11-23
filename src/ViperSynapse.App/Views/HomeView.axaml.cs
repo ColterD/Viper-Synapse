@@ -16,6 +16,12 @@ public sealed partial class HomeView : UserControl
             Home?.Open(device);
     }
 
+    void OpenDeviceSetup(object? sender, RoutedEventArgs e)
+    {
+        if (TopLevel.GetTopLevel(this) is { } top)
+            _ = top.Launcher.LaunchUriAsync(new Uri("https://github.com/ColterD/Viper-Synapse/blob/main/docs/getting-started.md"));
+    }
+
     void OpenLinkedGames(object? sender, RoutedEventArgs e) => Home?.OpenLinkedGames();
 
     void OpenMacros(object? sender, RoutedEventArgs e) => Home?.OpenMacros();

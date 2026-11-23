@@ -38,7 +38,7 @@
                                 <DataTemplate x:DataType="vm:GameRow">
                                     <Button Classes="gameTile" Margin="4" Click="PickGame">
                                         <StackPanel Spacing="8" VerticalAlignment="Center">
-                                            <TextBlock Text="◉◉" FontSize="26" Foreground="{StaticResource GreenBrush}" HorizontalAlignment="Center" />
+                                            <TextBlock Text="◉◉" FontSize="26" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" />
                                             <TextBlock Text="{Binding Name}" Foreground="#FFFFFF" FontSize="12" HorizontalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis" MaxWidth="140" />
                                         </StackPanel>

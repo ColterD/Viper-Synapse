@@ -34,7 +34,7 @@
                     <StackPanel Spacing="10" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Keyboard}">
                         <Border Name="KeyCapture" Focusable="True" Background="#1E1E1E" BorderBrush="#4A4A4A" BorderThickness="1" Height="34"
                                 Cursor="Hand">
-                            <TextBlock Text="{Binding CapturedText}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#44D62C" />
+                            <TextBlock Text="{Binding CapturedText}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}" />
                         </Border>
                         <WrapPanel>
                             <CheckBox Content="Ctrl" IsChecked="{Binding Ctrl}" Margin="0,0,10,0" />
