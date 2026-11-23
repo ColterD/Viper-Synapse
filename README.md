@@ -81,6 +81,10 @@ Settings → About shows when the running build was made.
 `viper-cli list` shows the Razer devices it can see; `viper-cli probe /dev/hidrawN` reads a device's
 serial, firmware and settings without changing anything.
 
+For a wired Naga Chroma (`1532:0053`), run `viper-cli naga-dpi-watch /dev/hidrawN` with its interface 0
+control node from `viper-cli list`. It prints the native DPI button press and release reports and live X/Y DPI
+samples without grabbing input or changing mouse settings. See [DPI diagnostic timing](docs/legacy-chroma-research.md#read-only-dpi-diagnostic).
+
 For Basilisk V4 Pro firmware slots and buttons, see [onboard CLI usage](docs/basilisk-v4-pro.md#onboard-profiles-and-buttons).
 
 ### Profile exchange

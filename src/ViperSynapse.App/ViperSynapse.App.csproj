@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ViperSynapse.Core\ViperSynapse.Core.csproj" />
+    <ProjectReference Include="..\ViperSynapse.Hardware\ViperSynapse.Hardware.csproj" />
     <!-- The service is published next to the window so a session without the systemd unit can start it. -->
     <ProjectReference Include="..\ViperSynapse.Service\ViperSynapse.Service.csproj" />
   </ItemGroup>

@@ -11,6 +11,12 @@ public sealed partial class SettingsView : UserControl
 
     void OpenProject(object? sender, RoutedEventArgs e) => Open("https://github.com/codingncaffeine/Viper-Synapse");
 
+    void OpenNagaDpiComparison(object? sender, RoutedEventArgs e)
+    {
+        if (TopLevel.GetTopLevel(this) is Window owner)
+            _ = new NagaDpiWindowComparisonView().ShowDialog(owner);
+    }
+
     void Open(string url)
     {
         if (TopLevel.GetTopLevel(this) is { } top)

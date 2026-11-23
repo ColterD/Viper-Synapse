@@ -1,0 +1,192 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ViperSynapse.App.ViewModels"
+        x:Class="ViperSynapse.App.Views.NagaDpiWindowComparisonView"
+        x:DataType="vm:NagaDpiWindowComparisonViewModel"
+        Title="Naga Chroma DPI comparison"
+        Background="{StaticResource PageBrush}"
+        Width="1080" Height="660" MinWidth="940" MinHeight="500"
+        WindowStartupLocation="CenterOwner">
+    <Window.Styles>
+        <Style Selector="ListBox.comparison">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        </Style>
+        <Style Selector="ListBox.comparison ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="12,5" />
+        </Style>
+        <Style Selector="Grid.comparisonHeader TextBlock">
+            <Setter Property="Foreground" Value="#CCCCCC" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Grid.reportRow TextBlock">
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="Button.sortHeader">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="20" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
+        <Grid ColumnDefinitions="Auto,Auto,Auto,*" ColumnSpacing="12">
+            <Button Name="OpenFileButton" Content="Open comparison JSON…" Click="OpenFile"
+                    IsEnabled="{Binding !IsLoading}" AutomationProperties.HelpText="Open an offline mirror-window comparison export" />
+            <Button Name="OpenCaptureButton" Grid.Column="1" Content="Open combined capture…" Click="OpenCapture"
+                    IsEnabled="{Binding !IsLoading}" AutomationProperties.HelpText="Choose a combined Naga Chroma JSONL capture" />
+            <Button Name="ExportCsvButton" Grid.Column="2" Content="Export changed reports CSV…" Click="ExportCsv"
+                    IsEnabled="{Binding CanExportCsv}" AutomationProperties.HelpText="Save the changed reports that match the active filters" />
+            <TextBlock Name="ComparisonFileName" Grid.Column="3" Text="{Binding FileName}"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding FileName}" />
+        </Grid>
+
+        <Grid Grid.Row="1" IsVisible="{Binding HasCapture}" ColumnDefinitions="*,300,Auto,Auto" ColumnSpacing="12">
+            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,7" TextTrimming="CharacterEllipsis"
+                       Text="{Binding CaptureName, StringFormat='Capture: {0}'}" ToolTip.Tip="{Binding CaptureName}" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock Text="Candidate mirror windows (ms)" />
+                <TextBox Name="CandidateWindowsBox" Text="{Binding CandidateWindowsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         IsEnabled="{Binding !IsLoading}" MaxLength="128"
+                         AutomationProperties.Name="Candidate mirror windows in milliseconds" />
+            </StackPanel>
+            <Button Name="CompareCaptureButton" Grid.Column="2" Content="Compare" Command="{Binding CompareCaptureCommand}"
+                    VerticalAlignment="Bottom" />
+            <TextBlock Grid.Column="3" Text="Comparing…" IsVisible="{Binding CompareCaptureCommand.IsRunning}"
+                       VerticalAlignment="Bottom" Margin="0,0,0,7" />
+        </Grid>
+
+        <Border Grid.Row="2" Background="#3A1214" Padding="12,8" CornerRadius="4"
+                IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock Name="ComparisonError" Text="{Binding Error}" Foreground="#FFB4B4" TextWrapping="Wrap" />
+        </Border>
+
+        <TextBlock Grid.Row="3" IsVisible="{Binding !HasResults}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="#CCCCCC" TextWrapping="Wrap"
+                   Text="Open a combined capture to compare mirror windows, or open an existing comparison JSON." />
+
+        <Grid Grid.Row="3" IsVisible="{Binding HasResults}" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="8">
+            <TextBlock Classes="heading" Text="PRESS COUNTS" />
+            <Border Grid.Row="1" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="4" ClipToBounds="True">
+                <Grid RowDefinitions="Auto,*">
+                    <Border Background="{StaticResource SideBrush}" Padding="12,7,24,7">
+                        <Grid Classes="comparisonHeader" ColumnDefinitions="*,112,112">
+                            <TextBlock Text="Window" />
+                            <TextBlock Grid.Column="1" Text="DPI Up" TextAlignment="Right" />
+                            <TextBlock Grid.Column="2" Text="DPI Down" TextAlignment="Right" />
+                        </Grid>
+                    </Border>
+                    <ListBox Name="CountsList" Classes="comparison" Grid.Row="1" MaxHeight="168" ItemsSource="{Binding Counts}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:NagaDpiWindowCountRow">
+                                <Grid ColumnDefinitions="*,112,112" Margin="0,0,12,0">
+                                    <TextBlock Text="{Binding Window}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding DpiUp}" TextAlignment="Right" />
+                                    <TextBlock Grid.Column="2" Text="{Binding DpiDown}" TextAlignment="Right" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,*" ColumnSpacing="12" Margin="0,8,0,0">
+                <TextBlock Classes="heading" Text="CHANGED REPORTS" />
+                <TextBlock Name="DetailStatus" Grid.Column="1" Text="{Binding DetailStatus}" VerticalAlignment="Center"
+                           Foreground="#CCCCCC" TextWrapping="Wrap" />
+            </Grid>
+            <Grid Grid.Row="3" ColumnDefinitions="170,150,220,*" ColumnSpacing="12"
+                  IsEnabled="{Binding !IsLoading}">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Candidate window" />
+                    <ComboBox Name="WindowFilterBox" ItemsSource="{Binding WindowOptions}" SelectedItem="{Binding WindowFilter, Mode=TwoWay}"
+                              HorizontalAlignment="Stretch" AutomationProperties.Name="Candidate window" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Text="DPI button" />
+                    <ComboBox Name="ButtonFilterBox" ItemsSource="{x:Static vm:NagaDpiWindowComparisonViewModel.ButtonOptions}"
+                              SelectedItem="{Binding ButtonFilter, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                              AutomationProperties.Name="DPI button" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="4">
+                    <TextBlock Text="Input source" />
+                    <ComboBox Name="SourceFilterBox" ItemsSource="{x:Static vm:NagaDpiWindowComparisonViewModel.SourceOptions}"
+                              SelectedItem="{Binding SourceFilter, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                              AutomationProperties.Name="Input source" />
+                </StackPanel>
+                <StackPanel Grid.Column="3" Spacing="4">
+                    <TextBlock Text="Search changed reports" />
+                    <TextBox Name="ReportSearchBox" Text="{Binding SearchQuery, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             PlaceholderText="Frame number or report hex" AutomationProperties.Name="Search changed reports" />
+                </StackPanel>
+            </Grid>
+            <Border Grid.Row="4" IsVisible="{Binding HasChanges}" BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1" CornerRadius="4" ClipToBounds="True">
+                <Grid RowDefinitions="Auto,*">
+                    <Border Background="{StaticResource SideBrush}" Padding="12,3,24,3">
+                        <Grid ColumnDefinitions="60,94,152,*,88,82,86,86" IsEnabled="{Binding !IsLoading}">
+                            <Button Name="SortFrame" Classes="flat sortHeader" Content="Frame" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Frame}" />
+                            <Button Name="SortTime" Grid.Column="1" Classes="flat sortHeader" Content="Time" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Time}" />
+                            <Button Name="SortInput" Grid.Column="2" Classes="flat sortHeader" Content="Input" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Input}" />
+                            <Button Name="SortReport" Grid.Column="3" Classes="flat sortHeader" Content="Raw report" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Report}" />
+                            <Button Name="SortButton" Grid.Column="4" Classes="flat sortHeader" Content="Button" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Button}" />
+                            <Button Name="SortWindow" Grid.Column="5" Classes="flat sortHeader" Content="Window" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Window}" />
+                            <Button Name="SortRecorded" Grid.Column="6" Classes="flat sortHeader" Content="Recorded" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Recorded}" />
+                            <Button Name="SortCandidate" Grid.Column="7" Classes="flat sortHeader" Content="Candidate" Click="SortReports"
+                                    CommandParameter="{x:Static vm:NagaDpiSortColumn.Candidate}" />
+                        </Grid>
+                    </Border>
+                    <ListBox Name="ChangesList" Classes="comparison" Grid.Row="1" ItemsSource="{Binding Changes}"
+                             SelectedItem="{Binding SelectedReport, Mode=TwoWay}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:NagaDpiWindowChangeRow">
+                                <Grid Classes="reportRow" ColumnDefinitions="60,94,152,*,88,82,86,86" Margin="0,0,12,0">
+                                    <TextBlock Text="{Binding FrameNumber}" ToolTip.Tip="{Binding FrameNumber}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding Time}" ToolTip.Tip="{Binding Time}" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Source}" />
+                                    <TextBlock Grid.Column="3" Text="{Binding Report}" FontFamily="monospace" FontSize="11"
+                                               ToolTip.Tip="{Binding Report}" Margin="0,0,10,0" />
+                                    <TextBlock Grid.Column="4" Text="{Binding Button}" />
+                                    <TextBlock Grid.Column="5" Text="{Binding Window}" />
+                                    <TextBlock Grid.Column="6" Text="{Binding Recorded}" />
+                                    <TextBlock Grid.Column="7" Text="{Binding Candidate}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+            <Border Name="ReportDetails" Grid.Row="5" IsVisible="{Binding HasSelectedReport}"
+                    Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1" CornerRadius="4" Padding="12,8">
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="24">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Raw report hex" />
+                        <TextBlock Name="SelectedReportHex" Text="{Binding SelectedReport.Report}" FontFamily="monospace"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Text="Recorded" />
+                        <TextBlock Name="SelectedRecordedPress" Text="{Binding SelectedReport.Recorded}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="4">
+                        <TextBlock Text="Candidate" />
+                        <TextBlock Name="SelectedCandidatePress" Text="{Binding SelectedReport.Candidate}" />
+                    </StackPanel>
+                    <Button Name="CopyHexButton" Grid.Column="3" Content="Copy Hex" VerticalAlignment="Center"
+                            IsEnabled="{Binding CanCopyHex}" Click="CopyHex"
+                            AutomationProperties.HelpText="Copy the selected report's complete raw hexadecimal value" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

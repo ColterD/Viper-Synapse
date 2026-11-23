@@ -1,0 +1,5 @@
+{"version":5,"device":"1532:0053","initial":{"ticks":0,"dpi":{"x":800,"y":900}},"source":"both","reportLength":4,"mirrorWindowMs":30}
+{"ticks":100000,"report":"04200000000000000000000000000000","before":{"ticks":0,"dpi":{"x":800,"y":900}},"after":[{"ticks":110000,"dpi":{"x":1600,"y":1700}}],"source":"factory-report-04"}
+{"ticks":200000,"report":"04000000000000000000000000000000","before":{"ticks":110000,"dpi":{"x":1600,"y":1700}},"after":[],"source":"factory-report-04"}
+{"ticks":400000,"report":"10000000","before":{"ticks":110000,"dpi":{"x":1600,"y":1700}},"after":[],"source":"mouse-back-forward"}
+{"ticks":500000,"report":"00000000","before":{"ticks":110000,"dpi":{"x":1600,"y":1700}},"after":[],"source":"mouse-back-forward"}

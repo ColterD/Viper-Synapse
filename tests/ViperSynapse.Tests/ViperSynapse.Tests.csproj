@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <EmbeddedResource Include="..\..\docs\samples\naga-chroma-combined.jsonl" LogicalName="naga-chroma-combined.jsonl" />
   </ItemGroup>
 
   <ItemGroup>

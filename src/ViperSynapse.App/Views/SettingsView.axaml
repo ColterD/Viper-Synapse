@@ -64,6 +64,12 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
+                    <Border Classes="card" Width="440">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="heading" Text="OFFLINE DIAGNOSTICS" />
+                            <Button Name="NagaDpiComparisonButton" Content="Naga Chroma DPI comparison" Click="OpenNagaDpiComparison" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
                 <Border Classes="card" Width="440">
                     <StackPanel Spacing="10">
