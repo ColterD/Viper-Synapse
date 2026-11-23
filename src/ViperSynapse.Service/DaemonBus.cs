@@ -25,6 +25,8 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
           <method name="GetDevices"><arg direction="out" type="s" name="json"/></method>
           <method name="GetSettings"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
           <method name="SetSettings"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/></method>
+          <method name="ExportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="profileId"/><arg direction="out" type="s" name="json"/></method>
+          <method name="ImportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/><arg direction="in" type="b" name="replace"/><arg direction="in" type="b" name="allowLaunch"/></method>
           <method name="GetDeviceState"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
           <method name="Onboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
           <method name="BackupOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="backup"/></method>
@@ -144,6 +146,23 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
                 string key = DeviceKey(reader.ReadString());
                 var settings = SettingsJson.ReadSettings(Json(reader.ReadString()));
                 _devices.SetSettings(key, settings);
+                ReplyEmpty(context);
+                break;
+            }
+            case "ExportProfile":
+            {
+                string key = DeviceKey(reader.ReadString()), profileId = reader.ReadString();
+                Guid? id = profileId.Length == 0 ? null : Guid.TryParse(profileId, out var parsed)
+                    ? parsed : throw new ArgumentException("The profile ID is not a UUID.");
+                ReplyString(context, Json(_devices.ExportProfile(key, id)));
+                break;
+            }
+            case "ImportProfile":
+            {
+                string key = DeviceKey(reader.ReadString());
+                var archive = PortableProfile.Read(Json(reader.ReadString()));
+                bool replace = reader.ReadBool(), allowLaunch = reader.ReadBool();
+                _devices.ImportProfile(key, archive, replace, allowLaunch);
                 ReplyEmpty(context);
                 break;
             }

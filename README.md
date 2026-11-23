@@ -83,6 +83,22 @@ serial, firmware and settings without changing anything.
 
 For Basilisk V4 Pro firmware slots and buttons, see [onboard CLI usage](docs/basilisk-v4-pro.md#onboard-profiles-and-buttons).
 
+### Profile exchange
+
+With the Viper Synapse service running, export or import a local profile archive using its
+four-digit settings key (`00e3` for Basilisk V4 Pro):
+
+```sh
+viper-cli profile export 00e3 basilisk-profile.json
+viper-cli profile import 00e3 basilisk-profile.json
+```
+
+Export selects the active profile by default and includes the macros it uses. To export a different
+profile, pass its UUID after the file path. Import keeps the current profile selected. Add
+`--replace` to update a profile with the same UUID. A conflicting global macro is reported
+before import. For a trusted archive that launches a command, application, file or URL,
+add `--allow-launch`. Refresh the app to reload its macro list after a CLI import.
+
 ## Acknowledgements
 
 The [OpenRazer](https://openrazer.github.io/) project documented the Razer control protocol that this work

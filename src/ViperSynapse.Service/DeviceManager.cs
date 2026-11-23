@@ -643,6 +643,22 @@ public sealed class DeviceManager : IDisposable
         }
     }
 
+    internal string ExportProfile(string key, Guid? id)
+    {
+        lock (_profileGate)
+        {
+            var settings = GetSettings(key);
+            return PortableProfile.Export(key, settings, Macros, id ?? settings.Active.Id).Write();
+        }
+    }
+
+    internal void ImportProfile(string key, PortableProfile archive, bool replace, bool allowLaunch)
+    {
+        lock (_profileGate)
+            Volatile.Write(ref _macros, _store.ImportProfile(key, archive, replace, allowLaunch));
+        ApplySettingsChange(key);
+    }
+
     public ShortcutList Shortcuts => Volatile.Read(ref _shortcuts);
 
     /// <summary>New shortcuts can mean a device must now be grabbed (or need not be any more): every model is

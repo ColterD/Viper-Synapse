@@ -26,6 +26,7 @@ static class Program
                 "watch" when args.Length >= 2 => Watch(args[1..]),
                 "raw" when args.Length >= 2 => Raw(args[1..]),
                 "bench" when args.Length >= 3 => Bench(args[1], args[2..]),
+                "profile" when args.Length >= 4 => ProfileCommands.RunAsync(args[1..]).GetAwaiter().GetResult(),
                 "onboard" => OnboardCommands.RunAsync(args[1..]).GetAwaiter().GetResult(),
                 _ => Usage(),
             };
@@ -55,6 +56,8 @@ static class Program
             viper-cli raw HIDRAW...    print input reports from hidraw nodes (changes only), e.g. a vendor interface
             viper-cli bench NODE frame ROWS COLS | zones LED...   frames per second a software effect gets: a moving hue to
                                       the live slot for 3 s (per-key rows, or a static colour per LED). Leaves the device on it.
+            viper-cli profile export DEVICE FILE [PROFILE_ID]    export the active profile or a profile selected by UUID
+            viper-cli profile import DEVICE FILE [--replace] [--allow-launch]    import a profile into the running service
             viper-cli onboard --help    manage Basilisk V4 Pro onboard slots and firmware button bindings
             """);
         return 64;

@@ -79,4 +79,5 @@ public static class SettingsJson
 [JsonSerializable(typeof(MacroLibrary))]
 [JsonSerializable(typeof(ShortcutList))]
 [JsonSerializable(typeof(IReadOnlyList<MacroStep>))]
+[JsonSerializable(typeof(PortableProfile))]
 internal sealed partial class SettingsJsonContext : JsonSerializerContext;

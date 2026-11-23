@@ -50,6 +50,45 @@ public sealed class SettingsStore(string root)
         }
     }
 
+    internal MacroLibrary ImportProfile(string key, PortableProfile archive, bool replace, bool allowLaunch)
+    {
+        lock (_gate)
+        {
+            var local = LoadMacros();
+            var (settings, macros) = archive.Import(key, LoadDevice(key), local, replace, allowLaunch);
+            if (ReferenceEquals(local, macros))
+            {
+                SaveDevice(key, settings);
+                return macros;
+            }
+
+            string path = DevicePath(key);
+            string pending = Stage(path, SettingsJson.Write(settings));
+            bool hadMacros = File.Exists(MacrosPath);
+            try
+            {
+                SaveMacros(macros);
+                try
+                {
+                    File.Move(pending, path, overwrite: true);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    if (hadMacros)
+                        SaveMacros(local);
+                    else
+                        File.Delete(MacrosPath);
+                    throw;
+                }
+            }
+            finally
+            {
+                File.Delete(pending);
+            }
+            return macros;
+        }
+    }
+
     public MacroLibrary LoadMacros() => Load(MacrosPath, SettingsJson.ReadMacros, () => MacroLibrary.Empty);
 
     public void SaveMacros(MacroLibrary macros) => Save(MacrosPath, SettingsJson.Write(macros));
