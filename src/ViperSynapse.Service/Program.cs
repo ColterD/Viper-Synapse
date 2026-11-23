@@ -6,11 +6,12 @@ namespace ViperSynapse.Service;
 
 static class Program
 {
-    internal static FileSystemWatcher WatchInputNodes(string path, FileSystemEventHandler changed)
+    internal static FileSystemWatcher WatchInputNodes(string path, FileSystemEventHandler changed, string filter = "*")
     {
         var watcher = new FileSystemWatcher(path)
         {
             IncludeSubdirectories = false,
+            Filter = filter,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.Attributes | NotifyFilters.Security,
         };
         watcher.Created += changed;
@@ -77,8 +78,16 @@ static class Program
             Task.Delay(500).ContinueWith(_ => { Volatile.Write(ref pending, 0); devices.Refresh(); }, TaskScheduler.Default);
         }
         using var watcher = WatchInputNodes("/dev/input", (_, _) => Changed());
+        using var hidrawWatcher = WatchInputNodes("/dev", (_, _) => Changed(), "hidraw*");
 
-        try { await Task.Delay(Timeout.Infinite, stop.Token).ConfigureAwait(false); }
+        // A sleeping mouse can return while the receiver's Linux nodes remain present.
+        using var receiverPoll = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await receiverPoll.WaitForNextTickAsync(stop.Token).ConfigureAwait(false))
+                if (devices.HasBasiliskUsbEndpoints)
+                    Changed();
+        }
         catch (OperationCanceledException) { }
         return 0;
     }

@@ -51,13 +51,13 @@ same on Wayland and X11.
 ## Devices
 
 The device catalogue covers 270+ Razer models (from OpenRazer's device data) plus our own entries.
-Tested on real hardware so far:
+Device support and validation:
 
 | Device | Status |
 | --- | --- |
 | Tartarus V2 Pro | key bindings, macros, lighting and per-key colours — tested |
 | Naga Left-Handed Edition 2020 | protocol, sensitivity and polling tested on the device; buttons and lighting in testing |
-| Basilisk V4 Pro | planned (wired and HyperSpeed) |
+| Basilisk V4 Pro | wired and HyperSpeed configuration, provisional Bluetooth input support. See [connection and feature coverage](docs/basilisk-v4-pro.md). |
 
 Other models in the catalogue are marked as untested in the app until someone confirms them.
 
@@ -80,6 +80,28 @@ Settings → About shows when the running build was made.
 
 `viper-cli list` shows the Razer devices it can see; `viper-cli probe /dev/hidrawN` reads a device's
 serial, firmware and settings without changing anything.
+
+For a wired Naga Chroma (`1532:0053`), run `viper-cli naga-dpi-watch /dev/hidrawN` with its interface 0
+control node from `viper-cli list`. It prints the native DPI button press and release reports and live X/Y DPI
+samples without grabbing input or changing mouse settings. See [DPI diagnostic timing](docs/legacy-chroma-research.md#read-only-dpi-diagnostic).
+
+For Basilisk V4 Pro firmware slots and buttons, see [onboard CLI usage](docs/basilisk-v4-pro.md#onboard-profiles-and-buttons).
+
+### Profile exchange
+
+With the Viper Synapse service running, export or import a local profile archive using its
+four-digit settings key (`00e3` for Basilisk V4 Pro):
+
+```sh
+viper-cli profile export 00e3 basilisk-profile.json
+viper-cli profile import 00e3 basilisk-profile.json
+```
+
+Export selects the active profile by default and includes the macros it uses. To export a different
+profile, pass its UUID after the file path. Import keeps the current profile selected. Add
+`--replace` to update a profile with the same UUID. A conflicting global macro is reported
+before import. For a trusted archive that launches a command, application, file or URL,
+add `--allow-launch`. Refresh the app to reload its macro list after a CLI import.
 
 ## Acknowledgements
 

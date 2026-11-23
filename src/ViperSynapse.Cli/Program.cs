@@ -25,7 +25,13 @@ static class Program
                 "inputs" => Inputs(),
                 "watch" when args.Length >= 2 => Watch(args[1..]),
                 "raw" when args.Length >= 2 => Raw(args[1..]),
+                "naga-dpi-watch" => NagaDpiDiagnostic.RunCommand(args[1..]),
+                "naga-dpi-replay" when args.Length == 2 => ReplayNagaCapture(args[1]),
+                "naga-dpi-compare" when args.Length == 3 => NagaDpiComparison.Compare(args[1], args[2]),
+                "naga-dpi-windows" when args.Length >= 3 => NagaDpiWindowComparison.Run(args[1], args[2..]),
                 "bench" when args.Length >= 3 => Bench(args[1], args[2..]),
+                "profile" when args.Length >= 4 => ProfileCommands.RunAsync(args[1..]).GetAwaiter().GetResult(),
+                "onboard" => OnboardCommands.RunAsync(args[1..]).GetAwaiter().GetResult(),
                 _ => Usage(),
             };
         }
@@ -41,6 +47,12 @@ static class Program
         }
     }
 
+    static int ReplayNagaCapture(string path)
+    {
+        using var capture = File.OpenText(path);
+        return NagaDpiCapture.Replay(capture, Console.Out, Console.Error);
+    }
+
     static int Usage()
     {
         Console.Error.WriteLine("""
@@ -52,8 +64,16 @@ static class Program
             viper-cli inputs          Razer input nodes and what each can send
             viper-cli watch NODE...   print events from input nodes (no grab)
             viper-cli raw HIDRAW...    print input reports from hidraw nodes (changes only), e.g. a vendor interface
+            viper-cli naga-dpi-watch CONTROL [--back-forward | --both [--mirror-window-ms N]] [--capture FILE]
+                                     log Naga Chroma DPI reports and samples
+            viper-cli naga-dpi-replay FILE    replay a Naga Chroma capture without a device
+            viper-cli naga-dpi-compare FACTORY REMAPPED    compare reports and X/Y DPI offline
+            viper-cli naga-dpi-windows FILE MS [MS...] [--details] [--json]    compare mirror windows offline
             viper-cli bench NODE frame ROWS COLS | zones LED...   frames per second a software effect gets: a moving hue to
                                       the live slot for 3 s (per-key rows, or a static colour per LED). Leaves the device on it.
+            viper-cli profile export DEVICE FILE [PROFILE_ID]    export the active profile or a profile selected by UUID
+            viper-cli profile import DEVICE FILE [--replace] [--allow-launch]    import a profile into the running service
+            viper-cli onboard --help    manage Basilisk V4 Pro onboard slots and firmware button bindings
             """);
         return 64;
     }

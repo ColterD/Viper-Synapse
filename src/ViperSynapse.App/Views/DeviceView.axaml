@@ -6,10 +6,16 @@
              xmlns:bindings="using:ViperSynapse.Core.Bindings"
              x:Class="ViperSynapse.App.Views.DeviceView"
              x:DataType="vm:DeviceViewModel">
-    <Grid RowDefinitions="Auto,*">
+    <UserControl.Styles>
+        <Style Selector="ListBox.devicePages ListBoxItem">
+            <Setter Property="Padding" Value="10,4" />
+        </Style>
+    </UserControl.Styles>
+    <Grid RowDefinitions="Auto,Auto,*">
         <!-- Header, as Synapse 4 has it: profile and keymap on the left, the pages in the middle. -->
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,*" Height="44" Margin="0,2,0,6">
-            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" VerticalAlignment="Center">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" VerticalAlignment="Center"
+                        IsVisible="{Binding !IsOnboardPage}">
                 <TextBlock Classes="headerIcon" Text="◎" ToolTip.Tip="Profile" />
                 <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" Width="190">
                     <ComboBox.ItemTemplate>
@@ -50,7 +56,8 @@
                     </Button>
                 </StackPanel>
             </StackPanel>
-            <ListBox Grid.Column="1" Classes="pills" VerticalAlignment="Center" ItemsSource="{Binding Pages}" SelectedItem="{Binding SelectedPage}">
+            <ListBox Name="DevicePages" Grid.Column="1" Classes="pills devicePages" VerticalAlignment="Center"
+                     ItemsSource="{Binding Pages}" SelectedItem="{Binding SelectedPage}">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
@@ -68,12 +75,28 @@
                         <Border Width="2" Height="5" Background="#BBBBBB" VerticalAlignment="Center" CornerRadius="0,1,1,0" />
                     </StackPanel>
                 </StackPanel>
-                <TextBlock Classes="caption" Text="{Binding Status}" VerticalAlignment="Center" />
+                <TextBlock Classes="caption" Text="{Binding Status}" ToolTip.Tip="{Binding Status}" VerticalAlignment="Center"
+                           MaxWidth="120" TextTrimming="CharacterEllipsis" />
             </StackPanel>
         </Grid>
 
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,310,*" ColumnSpacing="12" Margin="16,0,16,8"
+              IsVisible="{Binding !IsOnboardPage}">
+            <TextBlock Classes="caption" Text="Inspect unit" VerticalAlignment="Center" />
+            <ComboBox Name="InspectedUnitBox" ItemsSource="{Binding UnitChoices}" SelectedItem="{Binding InspectedUnit, Mode=TwoWay}"
+                      HorizontalAlignment="Stretch" AutomationProperties.Name="Inspect unit">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:DeviceUnitChoice">
+                        <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Name="DeviceUnitScope" Classes="caption" Grid.Column="2" Text="{Binding UnitScope}"
+                       VerticalAlignment="Center" TextWrapping="Wrap" />
+        </Grid>
+
         <!-- CUSTOMIZE -->
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,*"
+        <Grid Grid.Row="2" ColumnDefinitions="Auto,*"
               IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CUSTOMIZE}">
             <Border Grid.Column="0" Width="340" Background="{StaticResource SideBrush}" IsVisible="{Binding ShowKeyList}">
                 <DockPanel>
@@ -102,6 +125,7 @@
                                 <ItemsControl.DataTemplates>
                                     <DataTemplate x:DataType="vm:KeyRowViewModel">
                                         <Button Classes="keyCell" Classes.selected="{Binding IsSelected}" IsEnabled="{Binding Bindable}"
+                                                AutomationProperties.Name="{Binding Key.Label}"
                                                 Command="{Binding $parent[UserControl].((vm:DeviceViewModel)DataContext).SelectKeyCommand}" CommandParameter="{Binding}">
                                             <Grid ColumnDefinitions="34,1,*">
                                                 <TextBlock Text="{Binding Number}" FontSize="12" Foreground="#CCCCCC" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -219,8 +243,11 @@
                                     <StackPanel Spacing="10" IsVisible="{Binding $parent[UserControl].((vm:DeviceViewModel)DataContext).HasScrollFirmware}">
                                         <Border Height="1" Background="#2A2A2A" Margin="0,4" />
                                         <TextBlock Text="SCROLLING MODE" Foreground="#FFFFFF" FontSize="12" />
-                                        <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap"
-                                                   Text="Tactile, Free-Spin and Precision Tactile switch with the button below the wheel." />
+                                        <ComboBox ItemsSource="{Binding WheelModes}" SelectedItem="{Binding WheelMode, Mode=TwoWay}"
+                                                  DisplayMemberBinding="{ReflectionBinding Label}" AutomationProperties.Name="Scrolling mode" />
+                                        <TextBlock Text="{Binding ReportedWheelMode, StringFormat='Current mode {0}'}"
+                                                   IsVisible="{Binding HasReportedWheelMode}"
+                                                   Foreground="#CCCCCC" FontSize="12" />
                                         <StackPanel Orientation="Horizontal" Spacing="10">
                                             <TextBlock Text="SCROLL ACCELERATION" Foreground="#FFFFFF" FontSize="12" VerticalAlignment="Center" />
                                             <ToggleSwitch IsChecked="{Binding Acceleration}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
@@ -259,7 +286,7 @@
         </Grid>
 
         <!-- LIGHTING -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Lighting}" x:DataType="vm:LightingViewModel">
                 <!-- Left column: Brightness, Switch off lighting. -->
                 <StackPanel>
@@ -269,7 +296,8 @@
                                 <TextBlock Classes="heading" Text="BRIGHTNESS" VerticalAlignment="Center" />
                                 <ToggleSwitch IsChecked="{Binding LightingOn}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
                             </StackPanel>
-                            <controls:ValueSlider Value="{Binding Brightness}" Minimum="0" Maximum="100" IsEnabled="{Binding LightingOn}" />
+                            <controls:ValueSlider Value="{Binding Brightness}" Minimum="0" Maximum="100"
+                                                  IsEnabled="{Binding LightingOn}" IsVisible="{Binding ShowBrightness}" />
                         </StackPanel>
                     </Border>
                     <Border Classes="card" Width="440">
@@ -284,7 +312,7 @@
                 <Border Classes="card" Width="440">
                     <StackPanel Spacing="10">
                         <TextBlock Classes="heading" Text="EFFECTS" />
-                        <ListBox Classes="segmentList" ItemsSource="{x:Static vm:LightingViewModel.EffectTabs}" SelectedItem="{Binding EffectTab}"
+                        <ListBox Name="FrameEffectTabs" Classes="segmentList" ItemsSource="{x:Static vm:LightingViewModel.EffectTabs}" SelectedItem="{Binding EffectTab, Mode=TwoWay}"
                                  IsVisible="{Binding HasFrame}" HorizontalAlignment="Left">
                             <ListBox.ItemsPanel>
                                 <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
@@ -292,10 +320,9 @@
                         </ListBox>
                         <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding ShowQuick}"
                                    Text="Quick effects are presets that are saved to the device's profile and can be applied to your other Razer devices." />
-                        <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding !ShowQuick}"
-                                   Text="Advanced effects give every key its own colour: paint them below." />
                         <StackPanel Spacing="8" IsVisible="{Binding HasZones}">
-                            <CheckBox Content="Same effect on every zone" IsChecked="{Binding SyncAll}" />
+                            <CheckBox Content="Same effect on every zone" IsChecked="{Binding SyncAll}"
+                                      IsVisible="{Binding ShowZoneSync}" />
                             <TextBlock Classes="caption" Text="ZONE" />
                             <ComboBox ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone}" HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
@@ -323,9 +350,8 @@
                 </Border>
                 <Border Classes="card" Width="780" IsVisible="{Binding ShowFrameEditor}">
                     <StackPanel Spacing="10">
-                        <TextBlock Classes="heading" Text="PER-KEY COLOURS" />
-                        <TextBlock Foreground="#AAAAAA" FontSize="12" TextWrapping="Wrap"
-                                   Text="Pick a colour, then click the keys to paint them. The keypad shows it as you go." />
+                        <TextBlock Classes="heading" Text="PER-KEY COLOURS" IsVisible="{Binding !IsMouseLighting}" />
+                        <TextBlock Classes="heading" Text="PER-LED COLOURS" IsVisible="{Binding IsMouseLighting}" />
                         <StackPanel Orientation="Horizontal" Spacing="10">
                             <ColorPicker Color="{Binding PaintColor}" />
                             <Button Classes="cancel" Content="FILL ALL" Command="{Binding FillAllCommand}" />
@@ -334,14 +360,17 @@
                         <controls:DeviceDrawing Name="PaintCanvas" Height="460" IsVisible="{Binding ShowKeyCanvas}"
                                                 Device="{Binding $parent[UserControl].((vm:DeviceViewModel)DataContext)}"
                                                 PaintColors="{Binding KeyColors}" />
-                        <ItemsControl ItemsSource="{Binding Cells}" IsVisible="{Binding ShowLedGrid}" HorizontalAlignment="Left">
+                        <ItemsControl Name="LedPaintGrid" ItemsSource="{Binding Cells}" IsVisible="{Binding ShowLedGrid}" HorizontalAlignment="Left">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><UniformGrid Columns="{Binding GridColumns}" /></ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:LedCell">
-                                    <Button Width="44" Height="44" Margin="3" Background="{Binding Brush}" CornerRadius="6"
-                                            BorderBrush="#3A3A3A" BorderThickness="1" Click="PaintCell" ToolTip.Tip="LED" />
+                                    <Button Width="{Binding Width}" MinWidth="0" Height="44" Margin="2" Padding="0"
+                                            Background="{Binding Brush}" Foreground="{Binding LabelBrush}" CornerRadius="4"
+                                            FontSize="10" Content="{Binding Label}" HorizontalContentAlignment="Center"
+                                            BorderBrush="#3A3A3A" BorderThickness="1" Click="PaintCell"
+                                            AutomationProperties.Name="{Binding AccessibleName}" ToolTip.Tip="{Binding AccessibleName}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
@@ -351,7 +380,7 @@
         </ScrollViewer>
 
         <!-- PERFORMANCE -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Performance}" x:DataType="vm:PerformanceViewModel">
                 <Border Classes="card" Width="620">
                     <StackPanel Spacing="12">
@@ -377,13 +406,13 @@
                                 <DataTemplate x:DataType="vm:StageRow">
                                     <Grid ColumnDefinitions="44,70,*" RowDefinitions="Auto,Auto" Margin="0,4">
                                         <Button Classes="stage" Content="{Binding Number}" Classes.active="{Binding Active}" Click="ActivateStage" VerticalAlignment="Top" />
-                                        <NumericUpDown Grid.Column="1" Value="{Binding X}" Minimum="100" Increment="50" FormatString="0" ShowButtonSpinner="False"
+                                        <NumericUpDown Grid.Column="1" Value="{Binding X}" Minimum="100" Increment="{Binding DpiStep}" FormatString="0" ShowButtonSpinner="False"
                                                        Maximum="{Binding DpiMax}" VerticalAlignment="Top" />
-                                        <controls:ValueSlider Grid.Column="2" Value="{Binding X}" Minimum="100" Maximum="{Binding DpiMax}" Step="50"
+                                        <controls:ValueSlider Grid.Column="2" Value="{Binding X}" Minimum="100" Maximum="{Binding DpiMax}" Step="{Binding DpiStep}"
                                                               ShowBubble="False" ShowLabels="False" Margin="12,0,0,0" />
-                                        <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding Y}" Minimum="100" Increment="50" FormatString="0" ShowButtonSpinner="False"
+                                        <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding Y}" Minimum="100" Increment="{Binding DpiStep}" FormatString="0" ShowButtonSpinner="False"
                                                        Maximum="{Binding DpiMax}" IsVisible="{Binding SeparateXY}" VerticalAlignment="Top" />
-                                        <controls:ValueSlider Grid.Row="1" Grid.Column="2" Value="{Binding Y}" Minimum="100" Maximum="{Binding DpiMax}" Step="50"
+                                        <controls:ValueSlider Grid.Row="1" Grid.Column="2" Value="{Binding Y}" Minimum="100" Maximum="{Binding DpiMax}" Step="{Binding DpiStep}"
                                                               ShowBubble="False" ShowLabels="False" Margin="12,0,0,0" IsVisible="{Binding SeparateXY}" />
                                     </Grid>
                                 </DataTemplate>
@@ -406,7 +435,7 @@
         </ScrollViewer>
 
         <!-- CALIBRATION -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CALIBRATION}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CALIBRATION}">
             <StackPanel HorizontalAlignment="Center" Margin="20,8" Spacing="12" DataContext="{Binding Calibration}" x:DataType="vm:CalibrationViewModel">
                 <Border Background="#2A2A2A" Padding="20,14" Width="900">
                     <StackPanel Spacing="6">
@@ -431,8 +460,65 @@
             </StackPanel>
         </ScrollViewer>
 
+        <Grid Grid.Row="2" IsVisible="{Binding IsOnboardPage}">
+            <views:OnboardEditorView DataContext="{Binding Onboard}" />
+        </Grid>
+
+        <ScrollViewer Name="DeviceHealthPanel" Grid.Row="2"
+                      IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=HEALTH}">
+            <StackPanel Margin="24,16" MaxWidth="940" Spacing="12" DataContext="{Binding Health}" x:DataType="vm:DeviceHealth">
+                <TextBlock Classes="heading" Text="DEVICE HEALTH AND COMPATIBILITY" />
+                <Border Background="{StaticResource PanelBrush}" Padding="16">
+                    <Grid ColumnDefinitions="2*,*,*,*" ColumnSpacing="16">
+                        <StackPanel Spacing="4">
+                            <TextBlock Classes="caption" Text="Detected model" />
+                            <TextBlock Name="HealthModelName" Text="{Binding Model}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <TextBlock Classes="caption" Text="Connection" />
+                            <TextBlock Name="HealthConnection" Text="{Binding Connection}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Spacing="4">
+                            <TextBlock Classes="caption" Text="Firmware control" />
+                            <TextBlock Text="{Binding ControlStatus}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="3" Spacing="4">
+                            <TextBlock Classes="caption" Text="Linux input" />
+                            <TextBlock Text="{Binding InputStatus}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <TextBlock IsVisible="{Binding Issue, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           Text="{Binding Issue}" Foreground="#FFB4B4" TextWrapping="Wrap" />
+                <Border Background="{StaticResource PanelBrush}" Padding="16">
+                    <StackPanel>
+                        <Grid ColumnDefinitions="190,102,*,*" ColumnSpacing="12" Margin="0,0,0,6">
+                            <TextBlock Classes="caption" Text="Feature" />
+                            <TextBlock Grid.Column="1" Classes="caption" Text="Access" />
+                            <TextBlock Grid.Column="2" Classes="caption" Text="Reason" />
+                            <TextBlock Grid.Column="3" Classes="caption" Text="Verification" />
+                        </Grid>
+                        <ItemsControl Name="HealthFeatures" ItemsSource="{Binding Features}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DeviceHealthFeature">
+                                <Grid ColumnDefinitions="190,102,*,*" ColumnSpacing="12" Margin="0,6">
+                                    <TextBlock Name="HealthFeatureName" Text="{Binding Name}" TextWrapping="Wrap" />
+                                    <TextBlock Name="HealthFeatureStatus" Grid.Column="1" Text="{Binding Status}" FontWeight="SemiBold" />
+                                    <TextBlock Name="HealthFeatureReason" Grid.Column="2" Text="{Binding Reason}"
+                                               Foreground="#CCCCCC" TextWrapping="Wrap" />
+                                    <TextBlock Name="HealthFeatureVerification" Grid.Column="3" Text="{Binding Verification}"
+                                               Foreground="#CCCCCC" TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
         <!-- POWER -->
-        <ScrollViewer Grid.Row="1" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">
+        <ScrollViewer Grid.Row="2" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Power}" x:DataType="vm:PowerViewModel">
                 <Border Classes="card" Width="440">
                     <StackPanel Spacing="12">

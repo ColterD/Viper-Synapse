@@ -34,21 +34,29 @@ public static class RazerProbe
 
     /// <summary>Asks for the serial number with each known transaction id until one is answered, then reads
     /// the firmware version. Null when the device answers none.</summary>
-    public static DeviceIdentity? Identify(RazerTransport transport)
+    public static DeviceIdentity? Identify(RazerTransport transport, bool strict = false)
     {
         foreach (var id in Commands.KnownTransactionIds)
         {
             var request = Commands.Request(id, Commands.GetSerial);
             var answer = transport.Send(request);
-            if (answer.Status != ReportStatus.Successful || !answer.Answers(request))
+            if (!Accepts(request, answer, strict))
                 continue;
             string serial = Encoding.ASCII.GetString(answer.Arguments[..Math.Min((int)answer.DataSize, 22)]).TrimEnd('\0', ' ');
-            var firmware = transport.Send(Commands.Request(id, Commands.GetFirmware));
-            string version = firmware.Status == ReportStatus.Successful
+            if (strict && (string.IsNullOrWhiteSpace(serial) || serial.All(c => c == '0')))
+                continue;
+            var firmwareRequest = Commands.Request(id, Commands.GetFirmware);
+            var firmware = transport.Send(firmwareRequest);
+            string version = (strict ? Accepts(firmwareRequest, firmware, true) && firmware.DataSize >= 2 :
+                firmware.Status == ReportStatus.Successful)
                 ? $"v{firmware.Arguments[0]}.{firmware.Arguments[1]:D2}"
                 : "";
             return new DeviceIdentity(id, serial, version);
         }
         return null;
     }
+
+    public static bool Accepts(RazerReport request, RazerReport answer, bool strict) =>
+        answer.Status == ReportStatus.Successful && answer.Answers(request) &&
+        (!strict || (answer.TransactionId == request.TransactionId && answer.ChecksumValid));
 }

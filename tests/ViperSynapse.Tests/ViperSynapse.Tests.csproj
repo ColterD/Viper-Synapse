@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <EmbeddedResource Include="..\..\docs\samples\naga-chroma-combined.jsonl" LogicalName="naga-chroma-combined.jsonl" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +25,7 @@
     <ProjectReference Include="..\..\src\ViperSynapse.Hardware\ViperSynapse.Hardware.csproj" />
     <ProjectReference Include="..\..\src\ViperSynapse.Service\ViperSynapse.Service.csproj" />
     <ProjectReference Include="..\..\src\ViperSynapse.App\ViperSynapse.App.csproj" />
+    <ProjectReference Include="..\..\src\ViperSynapse.Cli\ViperSynapse.Cli.csproj" />
   </ItemGroup>
 
 </Project>

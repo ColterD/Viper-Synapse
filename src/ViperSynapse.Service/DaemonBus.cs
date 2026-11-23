@@ -2,6 +2,7 @@ using Tmds.DBus.Protocol;
 using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Engine;
 using ViperSynapse.Core.Input;
+using ViperSynapse.Core.Protocol;
 using ViperSynapse.Hardware;
 
 namespace ViperSynapse.Service;
@@ -24,7 +25,13 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
           <method name="GetDevices"><arg direction="out" type="s" name="json"/></method>
           <method name="GetSettings"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
           <method name="SetSettings"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/></method>
+          <method name="ExportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="profileId"/><arg direction="out" type="s" name="json"/></method>
+          <method name="ImportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/><arg direction="in" type="b" name="replace"/><arg direction="in" type="b" name="allowLaunch"/></method>
           <method name="GetDeviceState"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
+          <method name="GetUnitState"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="port"/><arg direction="in" type="s" name="productId"/><arg direction="in" type="s" name="serial"/><arg direction="out" type="s" name="json"/></method>
+          <method name="Onboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
+          <method name="BackupOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="backup"/></method>
+          <method name="RestoreOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
           <method name="GetMacros"><arg direction="out" type="s" name="json"/></method>
           <method name="SetMacros"><arg direction="in" type="s" name="json"/></method>
           <method name="GetShortcuts"><arg direction="out" type="s" name="json"/></method>
@@ -138,7 +145,25 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
             case "SetSettings":
             {
                 string key = DeviceKey(reader.ReadString());
-                _devices.SetSettings(key, SettingsJson.ReadSettings(Json(reader.ReadString())));
+                var settings = SettingsJson.ReadSettings(Json(reader.ReadString()));
+                _devices.SetSettings(key, settings);
+                ReplyEmpty(context);
+                break;
+            }
+            case "ExportProfile":
+            {
+                string key = DeviceKey(reader.ReadString()), profileId = reader.ReadString();
+                Guid? id = profileId.Length == 0 ? null : Guid.TryParse(profileId, out var parsed)
+                    ? parsed : throw new ArgumentException("The profile ID is not a UUID.");
+                ReplyString(context, Json(_devices.ExportProfile(key, id)));
+                break;
+            }
+            case "ImportProfile":
+            {
+                string key = DeviceKey(reader.ReadString());
+                var archive = PortableProfile.Read(Json(reader.ReadString()));
+                bool replace = reader.ReadBool(), allowLaunch = reader.ReadBool();
+                _devices.ImportProfile(key, archive, replace, allowLaunch);
                 ReplyEmpty(context);
                 break;
             }
@@ -148,13 +173,41 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
                 ReplyString(context, state == null ? "null" : System.Text.Json.JsonSerializer.Serialize(state, DeviceStateJson.Default.DeviceState));
                 break;
             }
+            case "GetUnitState":
+            {
+                var state = _devices.ReadUnitState(DeviceKey(reader.ReadString()), reader.ReadString(),
+                    DeviceKey(reader.ReadString()), reader.ReadString());
+                ReplyString(context, state == null ? "null" : System.Text.Json.JsonSerializer.Serialize(state, DeviceStateJson.Default.DeviceState));
+                break;
+            }
+            case "Onboard":
+            {
+                var onboard = BasiliskOnboard.ReadRequest(Json(reader.ReadString()));
+                ReplyString(context, BasiliskOnboard.WriteResult(_devices.ManageOnboard(onboard)));
+                break;
+            }
+            case "BackupOnboard":
+            {
+                var archiveRequest = OnboardBackupCodec.ReadRequest(reader.ReadString());
+                ReplyString(context, OnboardBackupCodec.WriteBackup(_devices.BackupOnboard(archiveRequest)));
+                break;
+            }
+            case "RestoreOnboard":
+            {
+                var archiveRequest = OnboardBackupCodec.ReadRequest(reader.ReadString());
+                ReplyString(context, OnboardBackupCodec.WriteResult(_devices.RestoreOnboard(archiveRequest)));
+                break;
+            }
             case "GetMacros":
                 ReplyString(context, SettingsJson.Write(_devices.Macros));
                 break;
             case "SetMacros":
-                _devices.SetMacros(SettingsJson.ReadMacros(Json(reader.ReadString())));
+            {
+                var macros = SettingsJson.ReadMacros(Json(reader.ReadString()));
+                _devices.SetMacros(macros);
                 ReplyEmpty(context);
                 break;
+            }
             case "GetShortcuts":
                 ReplyString(context, SettingsJson.Write(_devices.Shortcuts));
                 break;

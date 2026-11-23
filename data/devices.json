@@ -4877,7 +4877,7 @@
       "type" : "keyboard",
       "zones" : {
         "main" : {
-          "brightness" : false,
+          "brightness" : true,
           "effects" : [
             "breath_dual",
             "breath_random",

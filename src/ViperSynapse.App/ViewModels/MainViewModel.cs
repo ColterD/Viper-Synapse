@@ -41,6 +41,8 @@ public sealed partial class MainViewModel : ObservableObject
     readonly DaemonClient _client;
     readonly List<TabViewModel> _back = [], _forward = [];
     bool _navigating;
+    long _requestedDeviceSnapshot;
+    long _appliedDeviceSnapshot;
 
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
@@ -162,23 +164,35 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    async Task RefreshDevicesAsync()
+    Task RefreshDevicesAsync() => RefreshDevicesAsync(_client.GetDevicesAsync);
+
+    internal async Task RefreshDevicesAsync(Func<Task<IReadOnlyList<DeviceInfo>>> readDevices)
     {
-        var devices = await _client.GetDevicesAsync().ConfigureAwait(false);
+        long request = Interlocked.Increment(ref _requestedDeviceSnapshot);
+        var devices = await readDevices().ConfigureAwait(false);
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            if (request < _appliedDeviceSnapshot)
+                return;
+            _appliedDeviceSnapshot = request;
+
             var current = Devices.ToList();
             // One tab per device model; a second identical device shares the tab and the settings.
-            foreach (var info in devices.GroupBy(d => d.Key).Select(g => g.First()))
+            foreach (var group in devices.GroupBy(d => d.Key))
             {
-                var tab = current.FirstOrDefault(t => t.Key == info.Key);
+                var units = group.ToArray();
+                var tab = current.FirstOrDefault(t => t.Key == group.Key);
                 if (tab != null)
                 {
-                    tab.Info = info;
+                    bool endpointChanged = tab.SetAttachedUnits(units);
+                    tab.RefreshOnboard();
+                    if (endpointChanged)
+                        _ = tab.ReloadAsync();
                     current.Remove(tab);
                     continue;
                 }
-                tab = new DeviceViewModel(info, this);
+                tab = new DeviceViewModel(units[0], this);
+                tab.SetAttachedUnits(units);
                 // Devices sit between SYNAPSE and LINKED GAMES, as in Synapse.
                 Tabs.Insert(Tabs.IndexOf(LinkedGames), tab);
                 _ = tab.ReloadAsync();

@@ -1,0 +1,160 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViperSynapse.App.ViewModels"
+             xmlns:protocol="using:ViperSynapse.Core.Protocol"
+             x:Class="ViperSynapse.App.Views.OnboardEditorView"
+             x:DataType="vm:OnboardEditorViewModel">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="20,10,20,24" MaxWidth="940" Spacing="12">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <StackPanel Spacing="4">
+                    <TextBlock Classes="caption" Text="MOUSE" />
+                    <ComboBox x:Name="OnboardTargetBox" HorizontalAlignment="Stretch" MaxWidth="390"
+                              AutomationProperties.Name="Mouse" PlaceholderText="Select a mouse"
+                              IsEnabled="{Binding !IsBusy}"
+                              ItemsSource="{Binding Targets}" SelectedItem="{Binding SelectedTarget, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:OnboardTarget">
+                                <TextBlock Text="{Binding Label}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+                <Button x:Name="OnboardRefreshButton" Grid.Column="1" Content="Refresh" VerticalAlignment="Bottom"
+                        IsEnabled="{Binding !IsBusy}" Command="{Binding RefreshCommand}" />
+            </Grid>
+            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" />
+            <TextBlock x:Name="OnboardStatusText" Text="{Binding Status}" TextWrapping="Wrap"
+                       IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+            <WrapPanel IsEnabled="{Binding !IsBusy}">
+                <Border Classes="card" Width="400" VerticalAlignment="Top">
+                    <StackPanel Spacing="12">
+                        <TextBlock Classes="heading" Text="Onboard profiles" />
+                        <TextBlock Text="{Binding ActiveSlot, StringFormat='Active slot {0}'}"
+                                   IsVisible="{Binding ActiveSlot, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        <StackPanel Spacing="4">
+                            <TextBlock Classes="caption" Text="STORED SLOT" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <ComboBox x:Name="OnboardSlotBox" HorizontalAlignment="Stretch" PlaceholderText="Select a slot"
+                                          AutomationProperties.Name="Stored slot" IsEnabled="{Binding HasTarget}"
+                                          ItemsSource="{Binding Slots}" SelectedItem="{Binding SelectedSlot, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:OnboardSlotChoice">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button x:Name="OnboardActivateButton" Grid.Column="1" Content="Activate"
+                                        IsEnabled="{Binding CanActivate}" Command="{Binding ActivateCommand}" />
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Spacing="4" IsEnabled="{Binding HasSlot}">
+                            <TextBlock Classes="caption" Text="LOCAL SLOT NAME" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <TextBox x:Name="OnboardNameBox" Text="{Binding Name, Mode=TwoWay}" MaxLength="80"
+                                         AutomationProperties.Name="Local slot name" PlaceholderText="Enter a name" />
+                                <Button x:Name="OnboardRenameButton" Grid.Column="1" Content="Rename"
+                                        IsEnabled="{Binding CanRename}" Command="{Binding RenameCommand}" />
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Spacing="4" IsEnabled="{Binding HasTarget}">
+                            <TextBlock Classes="caption" Text="NEW SLOT" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <ComboBox x:Name="OnboardNewSlotBox" HorizontalAlignment="Stretch"
+                                          AutomationProperties.Name="New slot" PlaceholderText="Select an unused slot"
+                                          ItemsSource="{Binding AvailableSlots}" SelectedItem="{Binding NewSlot, Mode=TwoWay}" />
+                                <Button x:Name="OnboardCreateButton" Grid.Column="1" Content="Create"
+                                        IsEnabled="{Binding CanCreate}" Command="{Binding CreateCommand}" />
+                            </Grid>
+                        </StackPanel>
+                        <Button x:Name="OnboardBeginDeleteButton" Content="Delete slot…"
+                                IsVisible="{Binding !DeletePending}" IsEnabled="{Binding CanDelete}"
+                                Command="{Binding BeginDeleteCommand}" />
+                        <StackPanel Spacing="8" IsVisible="{Binding DeletePending}">
+                            <TextBlock Text="Delete the selected slot from this mouse?" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="OnboardDeleteButton" Content="Delete slot" Command="{Binding DeleteCommand}" />
+                                <Button x:Name="OnboardCancelDeleteButton" Content="Cancel" Command="{Binding CancelDeleteCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Spacing="8" IsVisible="{Binding HasBackupActions}">
+                            <TextBlock Classes="caption" Text="BACKUP &amp; RESTORE" />
+                            <TextBlock Text="Select the active slot to back up or restore DPI stages and supported button assignments."
+                                       TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="OnboardBackupButton" Content="Save backup…" Command="{Binding BackupSlotCommand}" />
+                                <Button x:Name="OnboardOpenBackupButton" Content="Open backup…" Command="{Binding OpenSlotBackupCommand}" />
+                            </StackPanel>
+                            <StackPanel Spacing="8" IsVisible="{Binding RestorePreview, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                <TextBlock x:Name="OnboardRestorePreviewText" Text="{Binding RestorePreview}" TextWrapping="Wrap" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="OnboardConfirmRestoreButton" Content="Restore to slot" Command="{Binding ConfirmSlotRestoreCommand}" />
+                                    <Button x:Name="OnboardCancelRestoreButton" Content="Cancel" Command="{Binding CancelSlotRestoreCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+                            <TextBlock x:Name="OnboardRestoreStatusText" Text="{Binding ArchiveStatus}" TextWrapping="Wrap"
+                                       IsVisible="{Binding ArchiveStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" Width="450" VerticalAlignment="Top">
+                    <StackPanel Spacing="12">
+                        <TextBlock Classes="heading" Text="Firmware buttons" />
+                        <StackPanel Spacing="12" IsEnabled="{Binding HasSlot}">
+                            <StackPanel Spacing="4">
+                                <TextBlock Classes="caption" Text="BUTTON" />
+                                <ComboBox x:Name="FirmwareButtonBox" HorizontalAlignment="Stretch"
+                                          AutomationProperties.Name="Firmware button" PlaceholderText="Select a button"
+                                          ItemsSource="{Binding Buttons}" SelectedItem="{Binding SelectedButton, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="protocol:OnboardButton">
+                                            <TextBlock Text="{Binding Name}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <CheckBox x:Name="FirmwareHypershiftToggle" Content="Hypershift layer"
+                                          IsChecked="{Binding IsHypershift, Mode=TwoWay}" />
+                                <Button x:Name="FirmwareReadButton" Grid.Column="1" Content="Read assignment"
+                                        Command="{Binding ReadBindingCommand}" />
+                            </Grid>
+                            <TextBlock x:Name="FirmwareBindingText" Text="{Binding BindingText}" TextWrapping="Wrap"
+                                       IsVisible="{Binding BindingText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Text="Activate the selected slot before editing its buttons."
+                                       Classes="caption" TextWrapping="Wrap" IsVisible="{Binding !CanEditBinding}" />
+                            <StackPanel Spacing="8" IsEnabled="{Binding CanEditBinding}">
+                                <TextBlock Classes="caption" Text="KEYBOARD ASSIGNMENT" />
+                                <ComboBox x:Name="FirmwareKeyBox" HorizontalAlignment="Stretch"
+                                          PlaceholderText="Choose a key" AutomationProperties.Name="Keyboard key"
+                                          ItemsSource="{Binding Keys}" SelectedItem="{Binding SelectedKey, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:OnboardKeyChoice">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FirmwareControlCheckBox" Content="Ctrl" IsChecked="{Binding Control, Mode=TwoWay}" Margin="0,0,10,0" />
+                                    <CheckBox x:Name="FirmwareShiftCheckBox" Content="Shift" IsChecked="{Binding Shift, Mode=TwoWay}" Margin="0,0,10,0" />
+                                    <CheckBox x:Name="FirmwareAltCheckBox" Content="Alt" IsChecked="{Binding Alt, Mode=TwoWay}" Margin="0,0,10,0" />
+                                    <CheckBox x:Name="FirmwareMetaCheckBox" Content="Super" IsChecked="{Binding Meta, Mode=TwoWay}" />
+                                </WrapPanel>
+                                <WrapPanel>
+                                    <Button x:Name="FirmwareAssignButton" Content="Assign key" IsEnabled="{Binding CanAssign}"
+                                            Command="{Binding AssignCommand}" Margin="0,0,8,6" />
+                                    <Button x:Name="FirmwareDisableButton" Content="Disable button"
+                                            Command="{Binding DisableCommand}" Margin="0,0,8,6" />
+                                    <Button x:Name="FirmwareRestoreButton" Content="Restore default" IsEnabled="{Binding CanRestore}"
+                                            Command="{Binding RestoreCommand}" Margin="0,0,0,6" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </WrapPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

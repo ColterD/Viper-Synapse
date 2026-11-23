@@ -3,18 +3,22 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Tmds.DBus.Protocol;
 using ViperSynapse.Core.Bindings;
+using ViperSynapse.Core.Protocol;
 
 namespace ViperSynapse.App.Services;
 
 /// <summary>A connected device as the service describes it.</summary>
 /// <summary>The device's own sensitivity, polling rate and battery.</summary>
 public sealed record DeviceState(IReadOnlyList<ViperSynapse.Core.Lighting.DpiStage>? Stages, int ActiveStage, int PollingRate, int? BatteryPercent, bool? Charging, int LiftOffLevel = -1,
-    int SleepSeconds = 0, int LowBatteryPercent = 0, bool? ScrollAcceleration = null, bool? SmartReel = null);
+    int SleepSeconds = 0, int LowBatteryPercent = 0, bool? ScrollAcceleration = null, bool? SmartReel = null,
+    byte? OnboardProfile = null, ViperSynapse.Core.Lighting.ScrollWheelMode? WheelMode = null);
 
 public sealed record DeviceInfo(
     string Key, string ProductId, string Name, string Type, string Port, bool Known, bool Verified,
     string? Serial, string? Firmware, string? ControlNode, IReadOnlyList<string> InputNodes, bool Remapping, string? Problem,
-    IReadOnlyList<ushort>? InputControls = null, string? InputControlsStatus = null);
+    IReadOnlyList<ushort>? InputControls = null, string? InputControlsStatus = null, string? Connection = null,
+    byte? OnboardProfile = null, bool NativeMacroKeys = false,
+    string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]
@@ -119,6 +123,24 @@ public sealed class DaemonClient : IAsyncDisposable
 
     public async Task<DeviceState?> GetDeviceStateAsync(string device) =>
         JsonSerializer.Deserialize(await CallStringAsync("GetDeviceState", device).ConfigureAwait(false), ClientJson.Default.DeviceState);
+
+    public async Task<DeviceState?> GetUnitStateAsync(DeviceInfo device)
+    {
+        var connection = Connection;
+        var message = Build(connection, "GetUnitState", "ssss", [device.Key, device.Port, device.ProductId, device.Serial ?? ""]);
+        string json = await connection.CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadString(), null)
+            .ConfigureAwait(false);
+        return JsonSerializer.Deserialize(json, ClientJson.Default.DeviceState);
+    }
+
+    public async Task<OnboardResult> ManageOnboardAsync(OnboardRequest request) =>
+        BasiliskOnboard.ReadResult(await CallStringAsync("Onboard", BasiliskOnboard.WriteRequest(request)).ConfigureAwait(false));
+
+    public async Task<OnboardBackup> BackupOnboardAsync(OnboardArchiveRequest request) =>
+        OnboardBackupCodec.ReadBackup(await CallStringAsync("BackupOnboard", OnboardBackupCodec.WriteRequest(request)).ConfigureAwait(false));
+
+    public async Task<OnboardRestoreResult> RestoreOnboardAsync(OnboardArchiveRequest request) =>
+        OnboardBackupCodec.ReadResult(await CallStringAsync("RestoreOnboard", OnboardBackupCodec.WriteRequest(request)).ConfigureAwait(false));
 
     public async Task<DeviceSettings> GetSettingsAsync(string device) =>
         SettingsJson.ReadSettings(await CallStringAsync("GetSettings", device).ConfigureAwait(false));
