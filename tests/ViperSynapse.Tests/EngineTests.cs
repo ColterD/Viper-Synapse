@@ -15,6 +15,7 @@ public class EngineTests
         public readonly Dictionary<Guid, Macro> Macros = [];
         public readonly List<string> Launched = [];
         public ShortcutList Shortcuts { get; set; } = ShortcutList.Empty;
+        public Action<Exception>? OnReport { get; init; }
         public void Gamepad(GamepadControl control, bool down) { lock (_events) _events.Add($"pad:{control}:{(down ? 1 : 0)}"); }
 
         public void Key(ushort code, int value) { lock (_events) _events.Add($"{KeyCodes.Name(code)}:{value}"); }
@@ -25,7 +26,13 @@ public class EngineTests
         public void SwitchProfile(CycleDirection direction, Guid? profileId) { lock (_events) _events.Add($"profile:{direction}"); }
         public void SwitchKeymap(CycleDirection direction, int keymap) { lock (_events) _events.Add($"keymap:{direction}"); }
         public Macro? FindMacro(Guid id) => Macros.GetValueOrDefault(id);
-        public void Report(Exception error) => throw error;
+        public void Report(Exception error)
+        {
+            if (OnReport is { } report)
+                report(error);
+            else
+                throw error;
+        }
 
         public string[] Events { get { lock (_events) return [.. _events]; } }
         public int Count(string e) => Events.Count(x => x == e);
@@ -699,6 +706,46 @@ public class EngineTests
         Assert.Equal(["KEY_B:1", "KEY_B:0", "KEY_C:1", "KEY_C:0"], rec.Events);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Retriggered_sequence_actions_are_all_cancelled(bool interruptWithKey)
+    {
+        // Sequence delays separate actions. The nested calls supply delays during playback.
+        var first = Macro.Create("first", [
+            new KeyStep(B, true), new DelayStep(100), new KeyStep(C, true), new KeyStep(C, false), new KeyStep(B, false),
+        ]);
+        var second = Macro.Create("second", [new DelayStep(100), new KeyStep(Tab, true), new KeyStep(Tab, false)]);
+        var sequence = Macro.Create("sequence", [
+            new MacroCallStep(first.Id), new DelayStep(1), new MacroCallStep(second.Id),
+        ]) with { Type = MacroType.Sequence };
+        var (engine, rec, time) = Make(Keymap.Empty("k").With(A, new MacroBinding(sequence.Id)).With(Caps, new DisableBinding()));
+        foreach (var macro in new[] { first, second, sequence })
+            rec.Macros[macro.Id] = macro;
+
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        rec.WaitFor(() => time.Timers >= 1);
+        engine.Key(A, 1);
+        engine.Key(A, 0);
+        rec.WaitFor(() => time.Timers >= 2);
+
+        if (interruptWithKey)
+        {
+            engine.Interruption = MacroInterruption.AnyKey;
+            engine.Key(Caps, 1);
+            engine.Key(Caps, 0);
+        }
+        else
+        {
+            engine.Reset();
+        }
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        rec.WaitFor(engine.TryConfirmOutputRecovery);
+        Assert.Equal(["KEY_B:1", "KEY_B:0"], rec.Events);
+    }
+
     [Fact]
     public void A_while_held_macro_stops_on_release_and_lets_go_of_its_keys()
     {
@@ -733,6 +780,37 @@ public class EngineTests
         time.Advance(TimeSpan.FromSeconds(1));
         Thread.Sleep(50);
         Assert.Equal(2, rec.Count("KEY_B:1"));
+    }
+
+    [Fact]
+    public void A_failed_toggle_restarts_on_the_next_press()
+    {
+        Exception? reported = null;
+        var rec = new Recorder { OnReport = error => Volatile.Write(ref reported, error) };
+        var time = new CountingTime();
+        var sink = new FailPrimaryAndCleanupSink(rec) { FailPress = true };
+        var macro = Macro.Create("toggle", [new KeyStep(C, true), new KeyStep(C, false), new DelayStep(100)]);
+        rec.Macros[macro.Id] = macro;
+        var engine = new RemapEngine(sink, rec, time)
+        {
+            Keymap = Keymap.Empty("k").With(A, new MacroBinding(macro.Id, MacroPlayback.Toggle))
+        };
+
+        engine.Key(A, 1); engine.Key(A, 0);
+        rec.WaitFor(() => Volatile.Read(ref reported) != null && engine.TryConfirmOutputRecovery());
+        Assert.IsType<IOException>(reported);
+        sink.FailPress = false;
+
+        engine.Key(A, 1); engine.Key(A, 0);
+        try
+        {
+            Assert.Equal(["KEY_C:1", "KEY_C:0"], rec.Events);
+        }
+        finally
+        {
+            engine.Reset();
+            rec.WaitFor(engine.TryConfirmOutputRecovery);
+        }
     }
 
     [Fact]
