@@ -2,11 +2,19 @@
 # Builds the Linux release artifacts into packaging/out:
 #   ViperSynapse-<ver>-linux-x64.tar.gz   self-contained, extract anywhere, run ./viper-synapse
 #   viper-synapse_<ver>_amd64.deb          system install, with the udev rule and uinput at boot
-# The version is VersionPrefix in Directory.Build.props.
+# The default is VersionPrefix in Directory.Build.props. Set VIPER_VERSION to
+# an explicit release or candidate, for example VIPER_VERSION=0.0.9-rc.1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VER=$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)
+VER=${VIPER_VERSION:-$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)}
+number='(0|[1-9][0-9]*)'
+if [[ ! $VER =~ ^$number\.$number\.$number(-rc\.$number)?$ ]]; then
+    printf 'Invalid release version %q. Expected X.Y.Z or X.Y.Z-rc.N.\n' "$VER" >&2
+    exit 2
+fi
+# Debian's ordering uses the control version. Keep the same SemVer in both download names.
+DEB_VER=${VER/-/\~}
 OUT=${VIPER_OUT:-packaging/out}
 PUB=$OUT/publish
 # Every removal names its variable with :? so an empty one stops the script instead of reaching /.
@@ -20,7 +28,7 @@ done
 echo "── publish v$VER (self-contained linux-x64)"
 for project in ViperSynapse.App ViperSynapse.Service ViperSynapse.Cli; do
     dotnet publish "src/$project/$project.csproj" -c Release -r linux-x64 --self-contained true \
-        -p:VersionPrefix="$VER" -o "$PUB" -v q --nologo
+        -p:Version="$VER" -o "$PUB" -v q --nologo
 done
 
 # The views must be compiled into the app; a publish that fell back to loading XAML at run time is not shipped.
@@ -82,7 +90,7 @@ chmod 755 "$DEB/DEBIAN/postinst"
 INSTALLED_KB=$(du -sk "$DEB/usr" | cut -f1)
 cat > "$DEB/DEBIAN/control" <<CTRL
 Package: viper-synapse
-Version: $VER
+Version: $DEB_VER
 Section: utils
 Priority: optional
 Architecture: amd64

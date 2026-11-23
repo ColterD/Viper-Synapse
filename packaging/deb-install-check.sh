@@ -9,7 +9,8 @@ if ! apt-get install -y -q /tmp/viper-synapse.deb xvfb xauth dbus > /tmp/apt.log
     exit 1
 fi
 . /etc/os-release
-echo "installed $(dpkg-query -W -f='${Package} ${Version}' viper-synapse) on $PRETTY_NAME"
+installed_version=$(dpkg-query -W -f='${Version}' viper-synapse)
+echo "installed viper-synapse $installed_version on $PRETTY_NAME"
 
 problems=0
 for f in /usr/bin/viper-synapse /usr/bin/viper-synapsed /usr/bin/viper-cli \
@@ -33,8 +34,13 @@ for f in /usr/lib/viper-synapse/viper-synapse /usr/lib/viper-synapse/viper-synap
 done
 [ $problems = 1 ] || echo "ok   every shipped library resolves"
 
-v=$(/usr/bin/viper-synapse --version 2>&1 | head -1)
-case $v in "Viper Relay "*) echo "ok   viper-synapse --version: $v" ;; *) echo "FAIL viper-synapse --version said: $v"; problems=1 ;; esac
+expected_version=${installed_version/\~/-}
+if v=$(/usr/bin/viper-synapse --version 2>&1) && [ "$v" = "Viper Relay $expected_version" ]; then
+    echo "ok   viper-synapse --version: $v"
+else
+    echo "FAIL viper-synapse --version said '$v', expected 'Viper Relay $expected_version'"
+    problems=1
+fi
 if /usr/bin/viper-cli list > /tmp/cli.log 2>&1; then echo "ok   viper-cli list runs (no devices in a container)"; else echo "FAIL viper-cli list: $(head -3 /tmp/cli.log)"; problems=1; fi
 
 # The window, on a virtual screen with a private bus: it must start and still be running after 10 seconds.

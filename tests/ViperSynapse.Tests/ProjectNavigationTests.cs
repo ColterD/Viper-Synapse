@@ -1,3 +1,4 @@
+using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -64,8 +65,9 @@ public sealed class ProjectNavigationTests
             {
                 Dispatcher.UIThread.RunJobs();
                 Assert.Equal(AppBranding.Name, view.FindControl<TextBlock>("AboutAppName")!.Text);
-                var version = typeof(SettingsViewModel).Assembly.GetName().Version!.ToString(3);
-                Assert.StartsWith($"Running build {version}", view.FindControl<TextBlock>("RunningBuild")!.Text);
+                var version = typeof(SettingsViewModel).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!
+                    .InformationalVersion.Split('+', 2)[0];
+                Assert.Equal($"Running build {version}", view.FindControl<TextBlock>("RunningBuild")!.Text);
                 var notes = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("PublishedReleaseNotes"));
                 Assert.Equal("/ColterD/Viper-Synapse/releases/tag/v0.0.8", notes.NavigateUri!.AbsolutePath);
                 var latest = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("LatestRelease"));

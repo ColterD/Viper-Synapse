@@ -53,7 +53,7 @@ public sealed partial class SettingsViewModel : TabViewModel
     public bool ShowSynapse => SelectedPage == "SYNAPSE";
     public bool ShowGeneral => SelectedPage == "GENERAL";
 
-    public string Version => $"Running build {typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3)}" + (_built.Length > 0 ? $"  ·  built {_built}" : "");
+    public string Version => $"Running build {AppBranding.Version}" + (_built.Length > 0 ? $"  ·  built {_built}" : "");
 
     partial void OnSelectedPageChanged(string value)
     {
