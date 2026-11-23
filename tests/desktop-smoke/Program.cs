@@ -11,6 +11,7 @@ using ViperSynapse.App.Controls;
 using ViperSynapse.App.Services;
 using ViperSynapse.App.ViewModels;
 using ViperSynapse.App.Views;
+using ViperSynapse.Core.Bindings;
 
 namespace ViperSynapse.DesktopSmoke;
 
@@ -126,6 +127,8 @@ static class Program
             "Saved profile feedback was missing after retry.");
         Console.WriteLine("Native desktop: failed persistence and visible retry passed.");
 
+        await VerifyLinkedGameDuringRemapSaveAsync(fixture, naga.Info);
+
         var profilesBeforeUnplug = File.ReadAllText(settingsPath);
         var keyButton = deviceView.GetVisualDescendants().OfType<Button>().First(button =>
             button.Classes.Contains("keyCell") && button.IsEnabled && button.IsEffectivelyVisible);
@@ -153,6 +156,67 @@ static class Program
         Console.WriteLine("Native desktop: keyboard remapping and lighting, and unplug during editing passed.");
 
         MeasurePageSwitching(window, keypad);
+    }
+
+    static async Task VerifyLinkedGameDuringRemapSaveAsync(EmulatedDevices fixture, DeviceInfo info)
+    {
+        const string executable = "viper-smoke-game.exe";
+        var work = Profile.Create("Work") with { Keymaps = [Keymap.Empty("First"), Keymap.Empty("Second")] };
+        var game = Profile.Create("Game") with { LinkedPrograms = [executable] };
+        await Task.Run(() => fixture.SetProfiles(info.Key, new DeviceSettings([work, game], work.Id, 1)));
+        await using var client = new DaemonClient();
+        await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var original = await client.GetSettingsAsync(info.Key).WaitAsync(TimeSpan.FromSeconds(8));
+        var saveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCommit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var main = new MainViewModel(client, new AppPreferences(Notifications: false), false)
+        {
+            WriteDeviceSettingsAsync = async (key, edit) =>
+            {
+                saveStarted.TrySetResult();
+                await allowCommit.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                await client.SetSettingsAsync(key, edit, original);
+            },
+        };
+        var device = new DeviceViewModel(info, main);
+        await device.ReloadSettingsAsync(_ => Task.FromResult(original));
+        try
+        {
+            device.Hypershift = true;
+            var key = device.Rows.First(row => row.Bindable);
+            device.SelectedKey = key;
+            var editor = device.Editor ?? throw new InvalidOperationException("The remap editor did not open.");
+            Require(editor.Target == "Work · Second · Hypershift", "The editor did not pin the original keymap and layer.");
+            editor.SelectedFunction = BindingEditorViewModel.Functions.Single(entry => entry.Kind == FunctionKind.Disable);
+            editor.SaveCommand.Execute(null);
+            await saveStarted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            try
+            {
+                Require(editor.IsSaving, "The linked-game switch did not overlap a pending remap save.");
+                await Task.Run(() => fixture.FocusGame(executable));
+                var switched = await client.GetSettingsAsync(info.Key).WaitAsync(TimeSpan.FromSeconds(8));
+                Require(switched.ActiveProfile == game.Id && switched.ActiveKeymap == 0,
+                    "The linked game did not switch profiles before the remap reached the daemon.");
+                Require(switched.Profiles.Single(p => p.Id == work.Id).Keymaps[1].Resolve(key.Key.Source, true) is DefaultBinding,
+                    "The binding was already persisted before the linked-game switch.");
+            }
+            finally { allowCommit.TrySetResult(); }
+
+            await main.FinishDeviceEditsAsync(TimeSpan.FromSeconds(8));
+            await UntilAsync(() => device.Editor == null, "The rebased remap did not complete successfully.");
+            var saved = await client.GetSettingsAsync(info.Key).WaitAsync(TimeSpan.FromSeconds(8));
+            var savedWork = saved.Profiles.Single(p => p.Id == work.Id);
+            Require(saved.ActiveProfile == game.Id && saved.ActiveKeymap == 0,
+                "The remap save reverted the game's active selection.");
+            Require(savedWork.Keymaps[1].Hypershift.GetValueOrDefault(key.Key.Source) is DisableBinding &&
+                savedWork.Keymaps[0].Resolve(key.Key.Source, true) is DefaultBinding &&
+                savedWork.Keymaps[1].Resolve(key.Key.Source, false) is DefaultBinding &&
+                saved.Active.Keymaps[0].Resolve(key.Key.Source, true) is DefaultBinding,
+                "The remap was written outside the original profile, keymap or layer.");
+            Console.WriteLine("Native desktop: a linked game switched profiles during a pending remap save without changing its target.");
+        }
+        finally { device.Detach(); }
     }
 
     static void ActivateWithKeyboard(Button button)

@@ -85,6 +85,42 @@ public sealed class DeviceLifecycleRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void A_firmware_retry_never_contacts_a_same_model_replacement_at_the_original_port()
+    {
+        using var manager = new DeviceManager(new SettingsStore(_root.FullName), new EventSink());
+        var node = Node("keypad", 0x02eb);
+        var original = new ReplyDevice("FIRST") { RejectKeymapWrites = true };
+        Refresh(manager, [node], [Input(node)], _ => original);
+        var unit = Assert.Single(manager.Devices);
+        var snapshot = manager.SettingsSnapshot(unit.Key);
+        var settings = SettingsJson.ReadSettings(snapshot.Json);
+        var profile = settings.Active with { Keymaps = [settings.Active.Keymaps[0], Keymap.Empty("Second")] };
+        var save = manager.CommitSettings(unit.Key, snapshot.Revision,
+            settings with { Profiles = [profile], ActiveKeymap = 1 });
+        Assert.True(save.Saved);
+        var failed = Assert.Single(save.Units!);
+        Assert.Equal(UnitApplyStatus.Failed, failed.Status);
+        Assert.Equal("FIRST", failed.Serial);
+        Assert.Contains("keymap", failed.Detail);
+
+        Refresh(manager, [], [], _ => throw new InvalidOperationException("The removed unit cannot be reopened."));
+        Assert.True(original.Disposed);
+        var replacement = new ReplyDevice("NEXT");
+        Refresh(manager, [node], [Input(node)], _ => replacement);
+        var connected = Assert.Single(manager.Devices);
+        Assert.Equal(failed.Port, connected.Port);
+        Assert.Equal(failed.ProductId, connected.ProductId);
+        Assert.Equal("NEXT", connected.Serial);
+        int reportsBeforeRetry = replacement.Sent;
+
+        var result = manager.RetryUnitApply(unit.Key, failed.Port, failed.ProductId, failed.Serial!);
+
+        Assert.Equal(UnitApplyStatus.Disconnected, result.Status);
+        Assert.Equal("FIRST", result.Serial);
+        Assert.Equal(reportsBeforeRetry, replacement.Sent);
+    }
+
+    [Fact]
     public void A_denied_control_path_backs_off_then_explicit_retry_recovers_it()
     {
         using var manager = new DeviceManager(new SettingsStore(_root.FullName), new EventSink());
@@ -241,6 +277,7 @@ public sealed class DeviceLifecycleRecoveryTests : IDisposable
         RazerReport? _request;
         int _sent;
         public bool FailFirstSend { get; init; }
+        public bool RejectKeymapWrites { get; init; }
         public int Sent => Volatile.Read(ref _sent);
         public bool Disposed { get; private set; }
         public string Path => "fixture";
@@ -262,7 +299,8 @@ public sealed class DeviceLifecycleRecoveryTests : IDisposable
                 _ => [],
             };
             var reply = RazerReport.Create(request.TransactionId, request.CommandClass, request.CommandId, arguments).Bytes.ToArray();
-            reply[0] = (byte)ReportStatus.Successful;
+            reply[0] = (byte)(RejectKeymapWrites && request is { CommandClass: 0x02, CommandId: 0x37 }
+                ? ReportStatus.Failure : ReportStatus.Successful);
             reply.CopyTo(report[1..]);
             return report.Length;
         }

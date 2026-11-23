@@ -1,4 +1,5 @@
 using System.Text;
+using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Engine;
 using ViperSynapse.Core.Input;
 using ViperSynapse.Core.Protocol;
@@ -15,6 +16,10 @@ sealed class EmulatedDevices(string root) : IDisposable
     public string Profiles => Path.Combine(root, "profiles", "devices");
 
     public DaemonBus CreateBus() => new(_manager, () => [], () => { });
+
+    public void SetProfiles(string key, DeviceSettings profiles) => _manager.SetSettings(key, profiles);
+
+    public void FocusGame(string executable) => _manager.Focused(new FocusedProgram(executable, null));
 
     public void Refresh(bool includeNaga)
     {
