@@ -26,10 +26,10 @@ Put the Markdown file in `docs/` and add it to the [documentation library](READM
 ## Run tests and build packages
 
 ```sh
-VIPER_HARDWARE_TESTS=0 dotnet test ViperSynapse.slnx --configuration Release
+dotnet test ViperSynapse.slnx --configuration Release
 ```
 
-The explicit hardware suite is opt-in because it writes settings to a plugged-in device. Some Linux integration tests also skip when their required kernel interfaces are unavailable. Report hardware checks separately from headless test results.
+Tests that write settings to a plugged-in device require `VIPER_HARDWARE_TESTS=1`. Tests that create virtual devices through the Linux kernel require `VIPER_UINPUT_TESTS=1` and access to `/dev/uinput`. Run the kernel tests in an isolated Linux environment with udev access to the virtual event nodes. Report hardware and kernel input checks separately from headless test results.
 
 ### Private desktop smoke test
 
@@ -43,7 +43,11 @@ The script starts a new X server and session bus with temporary app state. It us
 
 The smoke test reports page-switch time and managed allocation samples for synchronous device drawing. Compare samples on the same machine and configuration before using them to evaluate a rendering change. The runner also accepts build flags such as an offline restore configuration and a `DOTNET` SDK path override.
 
-`packaging/build-release.sh` builds the self-contained Linux x64 tarball and Debian package under `packaging/out`.
+### Release packages
+
+`packaging/build-release.sh` builds the self-contained Linux x64 tarball and Debian package under `packaging/out`. Set `VIPER_OUT` to choose another output directory. The script builds in a fresh temporary directory and copies the two packages to the destination, where an existing package of the same version is replaced.
+
+Run `bash tests/packaging-release-safety.sh` to check that producing packages preserves existing files in the checkout and output directory. This check uses a temporary fixture and stub packaging tools.
 
 ## Review changes
 

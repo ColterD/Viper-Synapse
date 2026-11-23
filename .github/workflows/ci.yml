@@ -30,6 +30,8 @@ jobs:
         run: dotnet restore ViperSynapse.slnx
       - name: Build and test
         run: dotnet test ViperSynapse.slnx --configuration Release --no-restore
+      - name: Check release output isolation
+        run: bash tests/packaging-release-safety.sh
       - name: Install private desktop dependencies
         run: |
           sudo apt-get update

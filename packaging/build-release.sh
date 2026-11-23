@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Linux release artifacts into packaging/out:
+# Builds the Linux release artifacts into packaging/out (or VIPER_OUT):
 #   ViperSynapse-<ver>-linux-x64.tar.gz   self-contained, extract anywhere, run ./viper-synapse
 #   viper-synapse_<ver>_amd64.deb          system install, with the udev rule and uinput at boot
 # The default is VersionPrefix in Directory.Build.props. Set VIPER_VERSION to
@@ -16,19 +16,19 @@ fi
 # Debian's ordering uses the control version. Keep the same SemVer in both download names.
 DEB_VER=${VER/-/\~}
 OUT=${VIPER_OUT:-packaging/out}
-PUB=$OUT/publish
-# Every removal names its variable with :? so an empty one stops the script instead of reaching /.
-rm -rf "${OUT:?}" && mkdir -p "$PUB"
+STAGE=$(mktemp -d -- "$(realpath -- "${TMPDIR:-/tmp}")/viper-release.XXXXXXXX")
+trap 'rm -rf -- "$STAGE"' EXIT
+PUB=$STAGE/publish
+DEB=$STAGE/debroot
+TARBALL=ViperSynapse-$VER-linux-x64.tar.gz
+PACKAGE=viper-synapse_${VER}_amd64.deb
+mkdir -p "$PUB"
 
-# Stale obj/ output can publish XAML that was never compiled: every release starts from clean trees.
-for p in src/ViperSynapse.App src/ViperSynapse.Service src/ViperSynapse.Cli src/ViperSynapse.Hardware src/ViperSynapse.Core; do
-    rm -rf "${p:?}/bin" "${p:?}/obj"
-done
-
+# Build from clean intermediate files without touching the workspace's bin/ or obj/ directories.
 echo "── publish v$VER (self-contained linux-x64)"
 for project in ViperSynapse.App ViperSynapse.Service ViperSynapse.Cli; do
     dotnet publish "src/$project/$project.csproj" -c Release -r linux-x64 --self-contained true \
-        -p:Version="$VER" -o "$PUB" -v q --nologo
+        --artifacts-path "$STAGE/build" -p:Version="$VER" -o "$PUB" -v q --nologo
 done
 
 # The views must be compiled into the app; a publish that fell back to loading XAML at run time is not shipped.
@@ -45,23 +45,15 @@ cp packaging/README.txt "$PUB/README.txt"
 cp packaging/udev/70-viper-synapse.rules "$PUB/"
 cp assets/icon-512.png "$PUB/viper-synapse.png"
 
-# Publishing for linux-x64 leaves a second, frozen build under each project's bin/Release/net10.0/linux-x64; running
-# that by mistake looks exactly like a fix that never landed. Remove it.
-for p in src/ViperSynapse.App src/ViperSynapse.Service src/ViperSynapse.Cli src/ViperSynapse.Hardware src/ViperSynapse.Core; do
-    rm -rf "${p:?}/bin/Release/net10.0/linux-x64" "${p:?}/obj/Release/net10.0/linux-x64"
-done
-
 echo "── tarball"
-tar -C "$PUB" -czf "$OUT/ViperSynapse-$VER-linux-x64.tar.gz" .
+tar -C "$PUB" -czf "$STAGE/$TARBALL" .
 
 echo "── deb"
-DEB=$OUT/debroot
-rm -rf "${DEB:?}"
 mkdir -p "$DEB/DEBIAN" "$DEB/usr/lib/viper-synapse" "$DEB/usr/bin" "$DEB/usr/share/applications" \
          "$DEB/usr/share/doc/viper-synapse" "$DEB/usr/lib/udev/rules.d" "$DEB/usr/lib/modules-load.d"
 cp -a "$PUB/." "$DEB/usr/lib/viper-synapse/"
 for f in README.txt LICENSE viper-synapse.png 70-viper-synapse.rules; do
-    rm -f "${DEB:?}/usr/lib/viper-synapse/$f"
+    rm -f -- "$DEB/usr/lib/viper-synapse/$f"
 done
 for f in viper-synapse viper-synapsed viper-cli; do
     printf '#!/bin/sh\nexec /usr/lib/viper-synapse/%s "$@"\n' "$f" > "$DEB/usr/bin/$f"
@@ -107,8 +99,18 @@ Description: Razer device settings: key bindings, macros, lighting and sensitivi
  It talks to devices directly over hidraw, with no kernel module, and types through
  uinput; the package installs the udev rule that gives the logged-in user access.
 CTRL
-dpkg-deb --build --root-owner-group "$DEB" "$OUT/viper-synapse_${VER}_amd64.deb" > /dev/null
-rm -rf "${DEB:?}"
+dpkg-deb --build --root-owner-group "$DEB" "$STAGE/$PACKAGE" > /dev/null
+
+mkdir -p -- "$OUT"
+for artifact in "$TARBALL" "$PACKAGE"; do
+    if [[ -d "$OUT/$artifact" ]]; then
+        printf 'Release artifact path is a directory: %s\n' "$OUT/$artifact" >&2
+        exit 4
+    fi
+done
+for artifact in "$TARBALL" "$PACKAGE"; do
+    mv -T -- "$STAGE/$artifact" "$OUT/$artifact"
+done
 
 echo "── artifacts:"
-ls -sh1 "$OUT" | grep -v publish
+ls -sh -- "$OUT/$TARBALL" "$OUT/$PACKAGE"
