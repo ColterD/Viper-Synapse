@@ -91,7 +91,7 @@ public static class Autostart
         File.WriteAllText(EntryPath, $"""
             [Desktop Entry]
             Type=Application
-            Name=Viper Synapse
+            Name={AppBranding.Name}
             Comment=Razer device settings, key bindings and macros
             Exec={(program.Contains(' ') ? $"\"{program}\"" : program)}{(minimized ? " --background" : "")}
             Icon=viper-synapse

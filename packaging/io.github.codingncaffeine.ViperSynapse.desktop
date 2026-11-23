@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Viper Synapse
+Name=Viper Relay
 GenericName=Razer Device Settings
 Comment=Key bindings, macros, lighting and sensitivity for Razer keyboards, keypads and mice
 Exec=viper-synapse
