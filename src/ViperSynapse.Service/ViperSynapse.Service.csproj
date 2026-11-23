@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ViperSynapse.Tests" />
+    <InternalsVisibleTo Include="ViperSynapse.DesktopSmoke" />
   </ItemGroup>
 
   <ItemGroup>

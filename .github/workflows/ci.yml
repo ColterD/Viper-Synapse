@@ -30,3 +30,9 @@ jobs:
         run: dotnet restore ViperSynapse.slnx
       - name: Build and test
         run: dotnet test ViperSynapse.slnx --configuration Release --no-restore
+      - name: Install private desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth dbus fonts-dejavu-core libfontconfig1 libice6 libsm6 libxcursor1 libxi6 libxrandr2
+      - name: Smoke test the native desktop with emulated devices
+        run: tests/desktop-smoke/run.sh

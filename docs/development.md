@@ -31,13 +31,25 @@ VIPER_HARDWARE_TESTS=0 dotnet test ViperSynapse.slnx --configuration Release
 
 The explicit hardware suite is opt-in because it writes settings to a plugged-in device. Some Linux integration tests also skip when their required kernel interfaces are unavailable. Report hardware checks separately from headless test results.
 
+### Private desktop smoke test
+
+Install Xvfb, xauth, a session D-Bus daemon and DejaVu fonts, then run:
+
+```sh
+tests/desktop-smoke/run.sh
+```
+
+The script starts a new X server and session bus with temporary app state. It uses a native Avalonia window and a daemon with emulated devices. It checks navigation at the minimum width and 150% scaling, direct access to an affected unit's Health page, save failure and retry, keyboard activation of the remap and per-key lighting controls, and unplugging during an uncommitted edit. Keyboard actions are synthesized as Avalonia events. The headless suite covers additional behavior and protocol failures.
+
+The smoke test reports page-switch time and managed allocation samples for synchronous device drawing. Compare samples on the same machine and configuration before using them to evaluate a rendering change. The runner also accepts build flags such as an offline restore configuration and a `DOTNET` SDK path override.
+
 `packaging/build-release.sh` builds the self-contained Linux x64 tarball and Debian package under `packaging/out`.
 
 ## Review changes
 
 Open focused pull requests against the fork’s `main` branch. For device changes, describe the specific model, connection mode, and behavior verified. Include the test command and any hardware coverage gaps.
 
-- [Build and test](../.github/workflows/ci.yml) runs the release-configuration test suite.
+- [Build and test](../.github/workflows/ci.yml) runs the release-configuration test suite and the private desktop smoke test.
 - [CodeQL](../.github/workflows/codeql.yml) scans C# for security and quality findings.
 - [Workflow lint](../.github/workflows/workflow-lint.yml) checks changes to GitHub Actions workflows.
 
