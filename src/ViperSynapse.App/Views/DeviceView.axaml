@@ -476,18 +476,28 @@
                 <TextBlock IsVisible="{Binding Issue, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                            Text="{Binding Issue}" Foreground="#FFB4B4" TextWrapping="Wrap" />
                 <Border Background="{StaticResource PanelBrush}" Padding="16">
-                    <ItemsControl Name="HealthFeatures" ItemsSource="{Binding Features}">
+                    <StackPanel>
+                        <Grid ColumnDefinitions="190,102,*,*" ColumnSpacing="12" Margin="0,0,0,6">
+                            <TextBlock Classes="caption" Text="Feature" />
+                            <TextBlock Grid.Column="1" Classes="caption" Text="Access" />
+                            <TextBlock Grid.Column="2" Classes="caption" Text="Reason" />
+                            <TextBlock Grid.Column="3" Classes="caption" Text="Verification" />
+                        </Grid>
+                        <ItemsControl Name="HealthFeatures" ItemsSource="{Binding Features}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DeviceHealthFeature">
-                                <Grid ColumnDefinitions="220,102,*" ColumnSpacing="12" Margin="0,6">
+                                <Grid ColumnDefinitions="190,102,*,*" ColumnSpacing="12" Margin="0,6">
                                     <TextBlock Name="HealthFeatureName" Text="{Binding Name}" TextWrapping="Wrap" />
                                     <TextBlock Name="HealthFeatureStatus" Grid.Column="1" Text="{Binding Status}" FontWeight="SemiBold" />
                                     <TextBlock Name="HealthFeatureReason" Grid.Column="2" Text="{Binding Reason}"
                                                Foreground="#CCCCCC" TextWrapping="Wrap" />
+                                    <TextBlock Name="HealthFeatureVerification" Grid.Column="3" Text="{Binding Verification}"
+                                               Foreground="#CCCCCC" TextWrapping="Wrap" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                        </ItemsControl>
+                    </StackPanel>
                 </Border>
             </StackPanel>
         </ScrollViewer>

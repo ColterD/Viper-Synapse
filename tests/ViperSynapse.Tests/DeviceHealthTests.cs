@@ -17,11 +17,11 @@ namespace ViperSynapse.Tests;
 public sealed class DeviceHealthTests
 {
     [Theory]
-    [InlineData("wired", "Wired USB", "Unconfirmed", "Hardware verification", "Detected")]
+    [InlineData("wired", "Wired USB", "Available", "Control interface responded.", "Detected")]
     [InlineData("receiver", "HyperSpeed", "Available", "Control interface responded.", "Detected")]
     [InlineData("bluetooth", "Bluetooth", "Unavailable", "over Bluetooth", "Available")]
     [InlineData("missing-control", "Wired USB", "Unavailable", "No compatible control interface", "Detected")]
-    [InlineData("missing-input", "Wired USB", "Unconfirmed", "Hardware verification", "Unavailable")]
+    [InlineData("missing-input", "Wired USB", "Available", "Control interface responded.", "Unavailable")]
     [InlineData("permission", "Wired USB", "Unavailable", "No permission", "Detected")]
     public Task Health_panel_reports_detected_transport_and_feature_access(string scenario, string connection,
         string firmwareStatus, string firmwareReason, string inputStatus) => HeadlessApp.Session.Dispatch(() =>
@@ -73,13 +73,14 @@ public sealed class DeviceHealthTests
 
                 var features = Find<ItemsControl>("HealthFeatures");
                 Assert.True(features.Bounds.Width > 650);
-                (string Status, string Reason) Feature(string name)
+                (string Status, string Reason, string Verification) Feature(string name)
                 {
                     var row = Assert.Single(features.GetVisualDescendants().OfType<Grid>(), grid =>
                         grid.Children.OfType<TextBlock>().Any(text => text.Name == "HealthFeatureName" && text.Text == name));
                     var cells = row.Children.OfType<TextBlock>().ToList();
                     return (Assert.Single(cells, text => text.Name == "HealthFeatureStatus").Text!,
-                        Assert.Single(cells, text => text.Name == "HealthFeatureReason").Text!);
+                        Assert.Single(cells, text => text.Name == "HealthFeatureReason").Text!,
+                        Assert.Single(cells, text => text.Name == "HealthFeatureVerification").Text!);
                 }
                 var onboard = Feature("Onboard profiles and firmware buttons");
                 Assert.Equal(firmwareStatus, onboard.Status);
@@ -88,6 +89,16 @@ public sealed class DeviceHealthTests
                 Assert.Equal(firmwareStatus, Feature("DPI stages").Status);
                 Assert.Equal(firmwareStatus, Feature("Firmware wheel settings").Status);
                 Assert.Equal(inputStatus, Feature("Software remapping").Status);
+                if (scenario == "receiver")
+                {
+                    Assert.StartsWith("Hardware: DPI table read.", Feature("DPI stages").Verification);
+                    Assert.StartsWith("Emulated:", onboard.Verification);
+                    Assert.Equal("Feature-specific verification is not recorded.", Feature("Lift-off calibration").Verification);
+                }
+                if (scenario == "wired")
+                    Assert.StartsWith("Emulated:", Feature("DPI stages").Verification);
+                if (bluetooth)
+                    Assert.Equal("Unavailable on this connection.", onboard.Verification);
                 if (scenario == "missing-input")
                     Assert.Contains("No Linux input interface", Feature("Software remapping").Reason);
 

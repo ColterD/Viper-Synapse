@@ -3,7 +3,7 @@ using ViperSynapse.Core.Devices;
 
 namespace ViperSynapse.App.ViewModels;
 
-internal sealed record DeviceHealthFeature(string Name, string Status, string Reason);
+internal sealed record DeviceHealthFeature(string Name, string Status, string Reason, string Verification);
 
 internal sealed record DeviceHealth(string Model, string Connection, string ControlStatus, string InputStatus,
     string? Issue, IReadOnlyList<DeviceHealthFeature> Features)
@@ -23,35 +23,43 @@ internal sealed record DeviceHealth(string Model, string Connection, string Cont
         };
         var control = ControlAccess(info, bluetoothLimited);
         var input = InputAccess(info, genericControls);
+        bool basilisk = model?.ProductId is DeviceCatalogue.BasiliskV4ProWired or DeviceCatalogue.BasiliskV4ProReceiver or DeviceCatalogue.BasiliskV4ProBluetooth;
+        bool receiver = basilisk && info.Connection == "hyperspeed";
+        string? Emulated(string scope) => basilisk ? $"Emulated: {scope}." : null;
         bool onboard = model?.Has("onboard_profiles") == true;
-        var onboardFeature = Firmware("Onboard profiles and firmware buttons", onboard);
+        var onboardFeature = Firmware("Onboard profiles and firmware buttons", onboard, Emulated("slot management, assignments and backup/restore"));
         if (onboard && !bluetoothLimited && info.Connection is not ("wired" or "hyperspeed"))
-            onboardFeature = new(onboardFeature.Name, Unavailable, "Onboard management requires a supported wired USB or HyperSpeed connection.");
+            onboardFeature = onboardFeature with { Status = Unavailable, Reason = "Onboard management requires wired USB or HyperSpeed." };
         else if (onboard && control.Status == Available && info.OnboardProfile == null)
-            onboardFeature = new(onboardFeature.Name, "Unconfirmed", "Viper has not confirmed the active onboard profile.");
+            onboardFeature = onboardFeature with { Status = "Unconfirmed", Reason = "Viper has not confirmed the active onboard profile." };
 
         return new(info.Name, connection, control.Status, input.Status, info.Problem,
         [
-            new("Software remapping", input.Status, input.Reason),
-            Firmware(model?.Has("dpi_stages") == true ? "DPI stages" : "DPI sensitivity", model?.Has("dpi") == true),
-            Firmware("Polling rate", model?.Has("poll_rate") == true),
-            Firmware("Lighting", model?.Zones.Count > 0 || model?.Type == "keypad"),
-            Firmware("Power settings", model?.Has("idle_time") == true),
+            new("Software remapping", input.Status, input.Reason,
+                Emulated("Linux input routing on this connection") ?? "Feature-specific verification is not recorded."),
+            Firmware(model?.Has("dpi_stages") == true ? "DPI stages" : "DPI sensitivity", model?.Has("dpi") == true,
+                receiver ? "Hardware: DPI table read. Stage changes tested in emulation." : Emulated("DPI stage updates")),
+            Firmware("Polling rate", model?.Has("poll_rate") == true,
+                receiver ? "Hardware: polling rate read." : Emulated("polling rate read")),
+            Firmware("Lighting", model?.Zones.Count > 0 || model?.Type == "keypad",
+                receiver ? "Hardware: quick-effect zones. Custom frames and slot settings tested in emulation." : Emulated("lighting reports")),
+            Firmware("Power settings", model?.Has("idle_time") == true, Emulated("power settings read")),
             Firmware("Lift-off calibration", model?.Has("lift_off") == true),
-            Firmware("Firmware wheel settings", model?.Has("scroll_wheel") == true),
+            Firmware("Firmware wheel settings", model?.Has("scroll_wheel") == true,
+                receiver ? "Hardware: Smart-Reel and acceleration toggles. Wheel mode tested in emulation." : Emulated("wheel mode and toggles")),
             onboardFeature,
         ]);
 
-        DeviceHealthFeature Firmware(string name, bool supported)
+        DeviceHealthFeature Firmware(string name, bool supported, string? verification = null)
         {
             if (supported)
-                return control.Status == Available && !info.Verified
-                    ? new(name, "Unconfirmed", "Control interface responded. Hardware verification for this connection is pending.")
-                    : new(name, control.Status, control.Reason);
+                return new(name, control.Status, control.Reason, bluetoothLimited
+                    ? "Unavailable on this connection."
+                    : verification ?? "Feature-specific verification is not recorded.");
 
             return new(name, "Not supported", model == null
                 ? "Viper has no compatibility information for this model."
-                : "Viper does not support this feature on this model.");
+                : "Viper does not support this feature on this model.", "");
         }
     }
 

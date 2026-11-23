@@ -14,7 +14,7 @@ Viper Synapse uses the same local profile for the wired, HyperSpeed, and Bluetoo
 
 The checked-in replay tests exercise the feature-report envelope and exact command bytes. They use the previously captured Basilisk DPI table and synthetic responses for connection transitions, failures, active slots, wheel modes, and onboard operations. No replay test requires a mouse. Polling cadence, RF stability, physical button and sensor behavior, LED output, and firmware persistence require hardware evidence.
 
-Open **Health** on the device tab to see the detected model, connection, and feature availability. The panel distinguishes Bluetooth limitations, an undetected control or input interface, and an interface the service could not open. Firmware features can remain **Unconfirmed** when the interface responds and hardware verification is still pending. **Detected** means Linux listed an input interface and the service will check access when it starts remapping.
+Open **Health** on the device tab to see the detected model, connection, and feature availability. The **Access** column shows whether Viper has the interface it needs. **Verification** states what was tested for that feature and connection, such as a physical DPI-table read or an emulated restore. **Detected** means Linux listed an input interface and the service will check access when it starts remapping.
 
 ## Onboard profiles and buttons
 
