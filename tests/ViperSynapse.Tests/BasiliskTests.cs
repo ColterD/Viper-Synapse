@@ -139,13 +139,13 @@ public class BasiliskTests
     }
 
     [Fact]
-    public void Basilisk_dpi_steps_preserve_single_unit_precision()
+    public Task Basilisk_dpi_steps_preserve_single_unit_precision() => HeadlessApp.Session.Dispatch(() =>
     {
         var basilisk = new PerformanceViewModel(DeviceCatalogue.Default.Find(0x00E3), _ => { });
         var naga = new PerformanceViewModel(DeviceCatalogue.Default.Find(0x008D), _ => { });
         Assert.Equal(1, basilisk.DpiStep);
         Assert.Equal(50, naga.DpiStep);
-    }
+    }, CancellationToken.None);
 
     [Fact]
     public void The_scroll_editor_saves_precision_tactile_and_can_leave_the_mode_to_the_mouse()
