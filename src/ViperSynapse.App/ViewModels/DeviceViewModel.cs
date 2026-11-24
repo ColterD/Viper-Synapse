@@ -876,7 +876,7 @@ public sealed partial class DeviceViewModel : TabViewModel
             return false;
 
         bool Current() => !_detached && _settingsReadRequest == pending.Request &&
-            _main.DeviceSaveState(Key).Revision == pending.Revision && _main.GetSaveFeedback(Key)?.Error == null;
+            _main.DeviceSaveState(Key).Revision == pending.Revision && !_main.HasUnsavedProfileSettings(Key);
         try
         {
             await pending.Saved.ConfigureAwait(false);
@@ -1070,10 +1070,10 @@ public sealed partial class DeviceViewModel : TabViewModel
             FlushPendingEdits();
             await _main.DeviceSaveState(Key).Completion.WaitAsync(TimeSpan.FromSeconds(5));
             int step = row.Number - 1;
-            if (!Current() || !Performance.Stages.Contains(row) || _main.GetSaveFeedback(Key)?.Error != null ||
+            if (!Current() || !Performance.Stages.Contains(row) || _main.HasUnsavedProfileSettings(Key) ||
                 _settings.Active.Performance is not { ManagedDpiSteps: true } performance || step >= performance.Stages.Count)
                 return;
-            await _main.Client.SelectManagedDpiStepAsync(unit, profile, step, performance.Stages[step]);
+            await _main.SelectManagedDpiStepAsync(unit, profile, step, performance.Stages[step]);
             if (Current())
                 await ReadDeviceAsync();
         }
@@ -1179,7 +1179,7 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         if (_bindingDraft is not { } draft || Editor is not { Conflict: null, IsSaving: false } editor)
             return;
-        if (_main.GetSaveFeedback(Key)?.Error is SettingsConflictException || _main.GetBindingFailure(Key)?.Error is SettingsConflictException)
+        if (_main.HasSettingsConflict(Key))
         {
             editor.Conflict = "The saved settings changed. Close this draft and choose Discard and reload… before editing the binding again.";
             return;
@@ -1255,7 +1255,8 @@ public sealed partial class DeviceViewModel : TabViewModel
         long previousRevision = draft.Revision;
         draft.Revision = _main.DeviceSaveState(Key).Revision + 1;
         _ = _main.SaveDeviceSettings(Key, Apply(baseline, false), baseline, Apply,
-            error => CompleteDraftSave(editor, error, settings => Apply(settings, false)), previousRevision);
+            error => CompleteDraftSave(editor, error, settings => Apply(settings, false)), previousRevision,
+            new(draft.ProfileId, draft.KeymapIndex, draft.KeymapName, draft.Hypershift, draft.Source));
         NotifySaveFeedback();
     }
 

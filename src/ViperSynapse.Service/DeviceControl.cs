@@ -58,6 +58,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     DpiStage? _lastConfirmedManagedDpi;
     bool _managedDpiEntryPending;
     string? _managedDpiProblem;
+    internal string? ManagedDpiProblem => Volatile.Read(ref _managedDpiProblem);
     // Replacing a control endpoint must not reuse a revision the UI has already seen.
     static long _nextDpiRevision;
     long _managedDpiRevision;
@@ -74,21 +75,35 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     public byte? OnboardProfile { get { lock (_gate) return _onboardProfile; } }
     int _sentKeymap = -1;
 
-    public string? LastProblem { get; private set; }
+    string? _lastProblem;
+    public string? LastProblem { get => _lastProblem; private set => _lastProblem = value; }
 
-    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing)
+    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing) =>
+        ApplyWithResult(port, productId, serial, profile, keymap, refreshing, out _);
+
+    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing,
+        out string? controlProblem)
     {
         lock (_gate)
         {
+            controlProblem = null;
             if (_disposed)
                 return new(port, productId, serial, UnitApplyStatus.Disconnected);
             int acknowledged = _acknowledgedWrites, confirmed = _readbackConfirmations;
+            long dpiRevision = _managedDpiRevision;
             Apply(profile, keymap, refreshing);
             acknowledged = _acknowledgedWrites - acknowledged;
             confirmed = _readbackConfirmations - confirmed;
-            var status = LastProblem != null ? UnitApplyStatus.Failed : acknowledged > 0 ? UnitApplyStatus.Acknowledged
+            controlProblem = LastProblem;
+            string? dpiProblem = _managedDpiRevision != dpiRevision ? _managedDpiProblem : null;
+            string? detail = (controlProblem, dpiProblem) switch
+            {
+                ({ } other, { } dpi) => other + " " + dpi,
+                var (other, dpi) => other ?? dpi,
+            };
+            var status = detail != null ? UnitApplyStatus.Failed : acknowledged > 0 ? UnitApplyStatus.Acknowledged
                 : confirmed > 0 ? UnitApplyStatus.ReadbackConfirmed : UnitApplyStatus.NoFirmwareChanges;
-            return new(port, productId, serial, status, LastProblem, acknowledged, confirmed);
+            return new(port, productId, serial, status, detail, acknowledged, confirmed);
         }
     }
 
@@ -190,7 +205,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
         {
             _managedDpi = null;
             _managedDpiStep = null;
-            LastProblem = _managedDpiProblem = "Managed DPI steps must contain one to five values from 100 to 16,000 DPI.";
+            _managedDpiProblem = "Managed DPI steps must contain one to five values from 100 to 16,000 DPI.";
             MarkManagedDpiChanged();
             return;
         }
@@ -237,12 +252,12 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     {
         var target = _managedDpi!.Stages[step];
         var request = DeviceCommands.Dpi(DpiTransactionId, target.X, target.Y);
-        LastProblem = null;
-        bool wrote = Send(request, "managed DPI step");
+        string? problem = null;
+        bool wrote = Send(request, "managed DPI step", ref problem);
         var actual = wrote ? ReadBack() : null;
         if (fromButton && actual != null && actual != target)
-            actual = Send(request, "managed DPI step") ? ReadBack() : null;
-        if (Confirm(actual == target, "managed DPI step"))
+            actual = Send(request, "managed DPI step", ref problem) ? ReadBack() : null;
+        if (Confirm(actual == target, "managed DPI step", ref problem))
         {
             _managedDpiStep = step;
             _lastConfirmedManagedDpi = target;
@@ -251,7 +266,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
         }
         else
         {
-            _managedDpiProblem = $"Could not confirm the requested DPI step. {LastProblem}";
+            _managedDpiProblem = $"Could not confirm the requested DPI step. {problem}";
         }
         MarkManagedDpiChanged();
 
@@ -260,9 +275,10 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             // A physical press can also cause a firmware DPI change. Read after a short settling interval.
             if (fromButton)
                 Thread.Sleep(40);
-            var actualDpi = ReadReport(NagaChromaSensitivity.ReadRequest()) is { } reply ? NagaChromaSensitivity.Decode(reply) : null;
+            var actualDpi = ReadReport(NagaChromaSensitivity.ReadRequest(), ref problem) is { } reply
+                ? NagaChromaSensitivity.Decode(reply) : null;
             if (actualDpi == null)
-                LastProblem ??= "The mouse did not return a readable DPI value.";
+                problem ??= "The mouse did not return a readable DPI value.";
             return actualDpi;
         }
     }
@@ -632,7 +648,9 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             Send(build(DeviceCommands.NoStore), what);
     }
 
-    bool Send(RazerReport request, string what)
+    bool Send(RazerReport request, string what) => Send(request, what, ref _lastProblem);
+
+    bool Send(RazerReport request, string what, ref string? problem)
     {
         try
         {
@@ -642,23 +660,25 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
                 _acknowledgedWrites++;
                 return true;
             }
-            LastProblem = $"The device did not acknowledge {what} ({answer.Status}).";
+            problem = $"The device did not acknowledge {what} ({answer.Status}).";
         }
         catch (IOException e)
         {
-            LastProblem = $"Could not send the {what}: {e.Message}";
+            problem = $"Could not send the {what}: {e.Message}";
         }
         _failedWrites++;
         return false;
     }
 
-    bool Confirm(bool confirmed, string what)
+    bool Confirm(bool confirmed, string what) => Confirm(confirmed, what, ref _lastProblem);
+
+    bool Confirm(bool confirmed, string what, ref string? problem)
     {
         if (confirmed)
             _readbackConfirmations++;
         else
         {
-            LastProblem ??= $"The device did not confirm the requested {what}.";
+            problem ??= $"The device did not confirm the requested {what}.";
             _failedWrites++;
         }
         return confirmed;
@@ -766,7 +786,9 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             ? (ScrollWheelMode)answer.Arguments[1] : null;
     }
 
-    RazerReport? ReadReport(RazerReport request)
+    RazerReport? ReadReport(RazerReport request) => ReadReport(request, ref _lastProblem);
+
+    RazerReport? ReadReport(RazerReport request, ref string? problem)
     {
         try
         {
@@ -775,7 +797,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
         }
         catch (IOException e)
         {
-            LastProblem ??= e.Message;
+            problem ??= e.Message;
             return null;
         }
     }

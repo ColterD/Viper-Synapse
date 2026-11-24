@@ -89,6 +89,8 @@ public sealed partial class MainViewModel : ObservableObject
         ReadDeviceSettingsAsync = client.GetSettingsAsync;
         CommitDeviceSettingsAsync = client.CommitSettingsAsync;
         ReadLiveDeviceAsync = client.GetUnitStateAsync;
+        SelectManagedDpiStepAsync = client.SelectManagedDpiStepAsync;
+        RetryUnitApplyAsync = client.RetryUnitApplyAsync;
         Settings = new SettingsViewModel(preferences, startAtLogin, built);
         Home = new HomeViewModel(this);
         LinkedGames = new LinkedGamesViewModel(this);
@@ -116,6 +118,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     internal Func<string, DeviceSettings, Task>? WriteDeviceSettingsAsync { get; init; }
     internal Func<string, DeviceSettings, DeviceSettings?, Task<SettingsCommitResult>> CommitDeviceSettingsAsync { get; init; }
+    internal Func<DeviceInfo, Guid, int, Core.Lighting.DpiStage, Task<DeviceState?>> SelectManagedDpiStepAsync { get; init; }
+    internal Func<string, UnitApplyOutcome, Task<UnitApplyOutcome>> RetryUnitApplyAsync { get; init; }
 
     internal (long Revision, Task Completion) DeviceSaveState(string key) =>
         _deviceSaves.GetValueOrDefault(key, (0, Task.CompletedTask));
@@ -140,13 +144,14 @@ public sealed partial class MainViewModel : ObservableObject
     // The service stores profiles by model, even if a particular unit is unplugged or a tab is recreated.
     internal Task<Exception?> SaveDeviceSettings(string key, DeviceSettings settings, DeviceSettings? baseline = null,
         Func<DeviceSettings, bool, DeviceSettings>? applyBinding = null, Action<Exception?>? onComplete = null,
-        long retryBindingRevision = 0)
+        long retryBindingRevision = 0, BindingSaveTarget? bindingTarget = null)
     {
         var previous = DeviceSaveState(key);
         long revision = previous.Revision + 1;
         var feedback = GetSaveFeedback(key);
         var request = new DeviceSaveFeedback(revision, true, settings, baseline, Error: feedback?.Error,
-            DeviceName: Devices.FirstOrDefault(device => device.Key == key)?.ShortName ?? feedback?.DeviceName, ApplyBinding: applyBinding);
+            DeviceName: Devices.FirstOrDefault(device => device.Key == key)?.ShortName ?? feedback?.DeviceName,
+            ApplyBinding: applyBinding, BindingTarget: bindingTarget);
         if (applyBinding != null)
             _pendingBindingSaves[key] = _pendingBindingSaves.GetValueOrDefault(key) + 1;
         SetSaveFeedback(key, request);

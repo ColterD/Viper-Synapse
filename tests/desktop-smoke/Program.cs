@@ -119,6 +119,7 @@ static class Program
         var addShortcut = Find<Button>(home, "AddShortcutButton");
         await TabToAsync(window, addShortcut);
         await KeyAsync("space");
+        await UntilAsync(() => main.Home.Shortcuts.Editing, "Keyboard activation did not open the shortcut editor.");
         var shortcutEditor = Descendant<BindingFlyout>(home);
         await TabToAsync(window, Find<Button>(shortcutEditor, "CancelBinding"));
         await KeyAsync("space");
@@ -151,7 +152,7 @@ static class Program
             await TabToAsync(window, health);
             await CaptureAsync($"onboard-warning-{width}");
             await KeyAsync("space");
-            Require(basilisk.SelectedPage == "HEALTH" && basilisk.InspectedUnit?.Serial == "HYP02",
+            await UntilAsync(() => basilisk.SelectedPage == "HEALTH" && basilisk.InspectedUnit?.Serial == "HYP02",
                 "The Onboard Health action did not keep the affected receiver selected.");
         }
         basilisk.SelectedPage = "ONBOARD";
@@ -180,7 +181,7 @@ static class Program
             await TabToAsync(window, openDevice);
             await CaptureAsync("save-failure-after-navigation");
             await KeyAsync("space");
-            Require(ReferenceEquals(main.SelectedTab, naga), "The save failure did not route back to its device.");
+            await UntilAsync(() => ReferenceEquals(main.SelectedTab, naga), "The save failure did not route back to its device.");
         }
         finally
         {
@@ -239,9 +240,11 @@ static class Program
         var toggle = Find<ToggleSwitch>(device, "ManagedDpiToggle");
         await TabToAsync(window, toggle);
         await KeyAsync("space");
+        await UntilAsync(() => naga.Performance.ManagedDpiSteps, "The managed DPI switch did not turn on.");
         var add = Find<Button>(device, "AddManagedDpiStage");
         await TabToAsync(window, add);
         await KeyAsync("space");
+        await UntilAsync(() => naga.Performance.Stages.Count == 2, "Adding a managed DPI step did not create the second row.");
         naga.Performance.Stages[0].X = 700;
         naga.Performance.Stages[1].X = 1300;
         await main.FinishDeviceEditsAsync(TimeSpan.FromSeconds(5));
@@ -254,7 +257,8 @@ static class Program
         Require((await client.GetUnitStateAsync(naga.Info))?.Stages?[0].X == 1300, "DPI Up did not apply 1300 DPI.");
         var entryStep = device.GetVisualDescendants().OfType<Button>().Single(button =>
             button.Classes.Contains("stage") && button.DataContext is StageRow { Number: 1 });
-        Require(!entryStep.Classes.Contains("active"), "The startup step still appeared active after the hardware button press.");
+        await UntilAsync(() => !entryStep.Classes.Contains("active"),
+            "The startup step still appeared active after the hardware button press.");
         await TabToAsync(window, entryStep);
         await KeyAsync("space");
         await UntilAsync(() => status.Text == "Mouse confirmed step 1." && entryStep.Classes.Contains("active"),
@@ -292,6 +296,7 @@ static class Program
         var source = ((KeyRowViewModel)row.DataContext!).Key.Source;
         await TabToAsync(window, row);
         await KeyAsync("space");
+        await UntilAsync(() => model.Editor != null, "Keyboard activation did not open the remap editor.");
         var editor = Descendant<BindingFlyout>(device);
         var assignment = Find<ComboBox>(editor, "AssignmentType");
         await UntilAsync(() => assignment.IsFocused, "Opening the editor did not focus the assignment type.");
@@ -302,29 +307,31 @@ static class Program
         var save = Find<Button>(editor, "SaveBinding");
         var cancel = Find<Button>(editor, "CancelBinding");
         await TabToAsync(window, capture);
-        await KeyAsync("space");
+        await ArmCaptureAsync();
         await KeyAsync("Tab");
-        Require(choose.IsFocused && draft.CapturedKey == 0, "Tab was captured as an assignment.");
+        await UntilAsync(() => choose.IsFocused && draft.CapturedKey == 0 && Equals(capture.Content, "Capture key"),
+            "Tab did not leave capture without assigning a key.");
         await KeyAsync("shift+Tab");
-        Require(capture.IsFocused, "Shift+Tab did not return to Capture key.");
-        await KeyAsync("space");
+        await UntilAsync(() => capture.IsFocused, "Shift+Tab did not return to Capture key.");
+        await ArmCaptureAsync();
         await KeyAsync("Escape");
-        Require(capture.IsFocused && draft.CapturedKey == 0 && Equals(capture.Content, "Capture key"), "Escape did not cancel capture.");
+        await UntilAsync(() => capture.IsFocused && draft.CapturedKey == 0 && Equals(capture.Content, "Capture key"),
+            "Escape did not cancel capture.");
         await KeyAsync("Tab");
+        await UntilAsync(() => choose.IsFocused, "Tab did not focus Choose key.");
         await KeyAsync("space");
-        await KeyAsync("Home");
-        await KeyAsync("Return");
-        await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_TAB", "Choose key could not assign Tab.");
+        await UntilAsync(() => choose.Flyout is { IsOpen: true }, "Choose key did not open its menu.");
+        await KeyAsync("Home", "Return");
+        await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_TAB" && choose.Flyout is { IsOpen: false },
+            "Choose key did not assign Tab and close its menu.");
         await TabToAsync(window, choose);
         await KeyAsync("space");
-        await KeyAsync("End");
-        await KeyAsync("Return");
-        await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_ESC", "Choose key could not assign Escape.");
+        await UntilAsync(() => choose.Flyout is { IsOpen: true }, "Choose key did not reopen its menu.");
+        await KeyAsync("End", "Return");
+        await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_ESC" && choose.Flyout is { IsOpen: false },
+            "Choose key did not assign Escape and close its menu.");
         await TabToAsync(window, capture);
-        // Send Space by its private evdev keycode so arming cannot also restore a modifier.
-        await NativeInputAsync("key", "65");
-        await UntilAsync(() => capture.IsFocused && Equals(capture.Content, "Listening…"),
-            "Capture did not enter listening mode with keyboard focus.");
+        await ArmCaptureAsync();
         KeyEventArgs? input = null;
         void ObserveInput(object? sender, KeyEventArgs e) => input = e;
         window.AddHandler(InputElement.KeyDownEvent, ObserveInput, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -377,6 +384,7 @@ static class Program
         await CaptureAsync("remap-recovered");
 
         await KeyAsync("space");
+        await UntilAsync(() => model.Editor != null, "Keyboard activation did not reopen the remap editor.");
         var reopened = Descendant<BindingFlyout>(device);
         model.Editor!.SelectedFunction = BindingEditorViewModel.Functions[0];
         await TabToAsync(window, Find<Button>(reopened, "CancelBinding"));
@@ -386,6 +394,7 @@ static class Program
             "Cancelling changed the saved binding.");
 
         await KeyAsync("space");
+        await UntilAsync(() => model.Editor != null, "Keyboard activation did not reopen the editor for the default binding.");
         reopened = Descendant<BindingFlyout>(device);
         model.Editor!.SelectedFunction = BindingEditorViewModel.Functions[0];
         await TabToAsync(window, Find<Button>(reopened, "SaveBinding"));
@@ -394,6 +403,14 @@ static class Program
         Require((await client.GetSettingsAsync(model.Key)).ActiveKeymapOrFirst.Resolve(source, false) is DefaultBinding,
             "A normal keyboard save did not restore the default binding.");
         Console.WriteLine("Native desktop: Tab navigation, visible focus, remap retry and focus return passed.");
+
+        async Task ArmCaptureAsync()
+        {
+            // Send Space by its private evdev keycode so arming cannot also restore a modifier.
+            await NativeInputAsync("key", "65");
+            await UntilAsync(() => capture.IsFocused && Equals(capture.Content, "Listening…"),
+                "Capture did not enter listening mode with keyboard focus.");
+        }
     }
 
     static async Task<HomeView> VerifyShortcutFocusAsync(Window window, HomeView home, MainViewModel main, DaemonClient client)
@@ -411,6 +428,7 @@ static class Program
         var original = EditButton();
         await TabToAsync(window, original);
         await KeyAsync("space");
+        await UntilAsync(() => shortcuts.Editing, "Keyboard activation did not start shortcut editing.");
         main.Show(main.Settings);
         main.Show(main.Home);
         home = Descendant<HomeView>(window);
@@ -425,11 +443,13 @@ static class Program
         Require((await client.GetShortcutsAsync()).Shortcuts.Single().Binding == new KeyboardBinding(47),
             "The edited shortcut did not preserve its new action.");
         await KeyAsync("space");
+        await UntilAsync(() => shortcuts.Editing, "Keyboard activation did not reopen the shortcut editor.");
         await TabToAsync(window, Find<Button>(Descendant<BindingFlyout>(home), "CancelBinding"));
         await KeyAsync("space");
         await UntilAsync(() => !shortcuts.Editing && EditButton().IsFocused, "Cancelling did not focus the edited shortcut.");
 
         await KeyAsync("space");
+        await UntilAsync(() => shortcuts.Editing, "The shortcut editor did not reopen before removal.");
         shortcuts.DeleteCommand.Execute(shortcuts.Rows.Single());
         await UntilAsync(() => !shortcuts.Editing && shortcuts.Rows.Count == 0 && Find<Button>(home, "AddShortcutButton").IsFocused,
             "Removing the edited shortcut did not focus Add a shortcut.");
@@ -439,19 +459,25 @@ static class Program
 
     static async Task TabToAsync(Window window, Control control)
     {
+        await UntilAsync(() => control.IsEffectivelyVisible && control.IsEffectivelyEnabled,
+            $"The Tab target {control.Name ?? control.GetType().Name} did not become available.");
         if (control.IsFocused && !control.Classes.Contains(":focus-visible"))
-            await KeyAsync("Tab");
+            await AdvanceTabAsync();
         for (var i = 0; i < 90 && !control.IsFocused; ++i)
-            await KeyAsync("Tab");
-        Require(control.IsFocused && control.Classes.Contains(":focus-visible"),
+            await AdvanceTabAsync();
+        await UntilAsync(() => control.IsFocused && control.Classes.Contains(":focus-visible"),
             $"{control.Name ?? control.GetType().Name} was not visibly reachable using Tab; focus is {window.FocusManager?.GetFocusedElement()}.");
+
+        async Task AdvanceTabAsync()
+        {
+            var previous = window.FocusManager?.GetFocusedElement();
+            await KeyAsync("Tab");
+            await UntilAsync(() => window.FocusManager?.GetFocusedElement() is { } focused && !ReferenceEquals(previous, focused),
+                $"Tab did not move focus from {previous}.");
+        }
     }
 
-    static async Task KeyAsync(string key)
-    {
-        await NativeInputAsync("key", "--clearmodifiers", key);
-        await Task.Delay(100);
-    }
+    static Task KeyAsync(params string[] keys) => NativeInputAsync(["key", "--clearmodifiers", .. keys]);
 
     static async Task CaptureAsync(string state)
     {

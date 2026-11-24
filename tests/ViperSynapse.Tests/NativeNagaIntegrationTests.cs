@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using ViperSynapse.Core.Bindings;
@@ -95,7 +97,7 @@ public class NativeNagaIntegrationTests
     }
 
     [Fact]
-    public void Explicit_remaps_replace_managed_stepping_for_both_advertised_evdev_dpi_codes()
+    public async Task Explicit_remaps_replace_managed_stepping_for_both_advertised_evdev_dpi_codes()
     {
         using var device = new EmulatedNaga { HasEvdevDpi = true };
         device.RefreshWithControl(MouseNode());
@@ -105,6 +107,7 @@ public class NativeNagaIntegrationTests
         device.Send(NagaDpiUp, 0);
         device.Send(NagaDpiDown, 1);
         device.Send(NagaDpiDown, 0);
+        await device.WaitForDpiQueue();
         Assert.Equal<(ushort, int)>([(F1, 1), (F1, 0), (F2, 1), (F2, 0)], device.Output.Keys);
         Assert.Equal(1, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
         Assert.Equal(1, device.Firmware.Writes);
@@ -179,6 +182,7 @@ public class NativeNagaIntegrationTests
         device.Bind((NagaDpiDown, F4));
         vendor.VendorReport(0x21);
         vendor.VendorReport();
+        await device.WaitForDpiQueue();
         Assert.Equal<(ushort, int)>([(F4, 1), (F4, 0)], device.Output.Keys);
         Assert.Equal(2, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
         Assert.Equal(4, device.Firmware.Writes);
@@ -382,6 +386,95 @@ public class NativeNagaIntegrationTests
         Assert.Equal(0, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Failed_vendor_reader_keeps_thumb_and_tilt_and_uses_evdev_dpi_until_refresh(bool failOnStart)
+    {
+        using var device = new EmulatedNaga { HasEvdevDpi = true, RejectVendorReader = true, FailVendorOnStart = failOnStart };
+        device.RefreshWithControl(MouseNode(), VendorNode());
+        var macro = Macro.Create("Thumb", [new KeyStep(F3, true), new KeyStep(F3, false)]);
+        device.Manager.SetMacros(new MacroLibrary([macro]));
+        device.BindMacro(ThumbOne, macro, bindTilt: true);
+        var mouse = device.Readers[MousePath];
+        var session = device.Session;
+        device.Configure(new PerformanceSettings([new(700, 700), new(1300, 1300)], 0, 0) { ManagedDpiSteps = true });
+        Assert.Same(session, device.Session);
+        Assert.False(mouse.Disposed);
+        Assert.True(device.Info.ManagedDpiListening);
+        Assert.Contains(VendorPath, device.Info.InputIssue!);
+        if (failOnStart)
+            Assert.True(device.Readers[VendorPath].Disposed);
+        else
+            Assert.DoesNotContain(VendorPath, device.Readers.Keys);
+
+        mouse.MouseReport(0x20);
+        mouse.MouseReport(0);
+        device.Send(ThumbOne, 1);
+        device.Send(ThumbOne, 0);
+        device.Send(NagaDpiUp, 1);
+        device.Send(NagaDpiUp, 0);
+        await device.WaitForDpiQueue();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (!device.Output.Keys.Contains((F3, 0)))
+            await Task.Delay(10, timeout.Token);
+        Assert.Equal<(ushort, int)>([(F1, 1), (F1, 0), (F3, 1), (F3, 0)], device.Output.Keys);
+        Assert.Equal(1, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
+
+        device.RejectVendorReader = false;
+        device.RetryControl(MouseNode(), VendorNode());
+        Assert.Same(session, device.Session);
+        Assert.Same(mouse, device.Readers[MousePath]);
+        Assert.Null(device.Info.InputIssue);
+        device.Readers[VendorPath].VendorReport(0x21);
+        device.Readers[VendorPath].VendorReport();
+        await device.WaitForDpiQueue();
+        Assert.Equal(0, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Confirmed_dpi_clears_only_the_managed_dpi_health_error(bool rejectPollingRate, bool useButton)
+    {
+        using var device = new EmulatedNaga();
+        device.RefreshWithControl(MouseNode(), VendorNode());
+        var performance = new PerformanceSettings([new(700, 700), new(1300, 1300)], 0, 1000) { ManagedDpiSteps = true };
+        var profile = Profile.Create("Managed steps") with { Performance = performance };
+        device.Firmware.RejectPollingRate = rejectPollingRate;
+        device.Firmware.RejectDpi = true;
+        device.SwitchProfile(profile);
+        Assert.Contains("managed DPI step", device.Info.Problem!);
+        if (rejectPollingRate)
+            Assert.Contains("polling rate", device.Info.Problem!);
+
+        device.Firmware.RejectDpi = false;
+        if (useButton)
+        {
+            device.Readers[VendorPath].VendorReport(0x20);
+            device.Readers[VendorPath].VendorReport();
+            await device.WaitForDpiQueue();
+        }
+        else
+        {
+            var selected = device.Info;
+            device.Manager.SelectManagedDpiStep(ProductKey, selected.Port, ProductKey, selected.Serial ?? "",
+                profile.Id, 1, performance.Stages[1]);
+        }
+
+        Assert.Equal(1, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
+        Assert.Null(device.Manager.ReadState(ProductKey)?.ManagedDpiProblem);
+        if (rejectPollingRate)
+        {
+            Assert.Contains("polling rate", device.Info.Problem!);
+            Assert.DoesNotContain("managed DPI step", device.Info.Problem!);
+        }
+        else
+            Assert.Null(device.Info.Problem);
+    }
+
     [Fact]
     public async Task Thumb_macros_play_the_same_before_and_after_managed_steps_and_tilt()
     {
@@ -516,6 +609,8 @@ public class NativeNagaIntegrationTests
         public bool HasEvdevTiltKeys { get; init; }
         public bool HasEvdevDpi { get; init; }
         public bool RejectNativeReader { get; init; }
+        public bool RejectVendorReader { get; set; }
+        public bool FailVendorOnStart { get; init; }
         public bool RejectControlOpen { get; set; }
         readonly FakeTimeProvider _clock = new();
         public void AdvanceTiltWindow() => _clock.Advance(TimeSpan.FromMilliseconds(25));
@@ -528,9 +623,10 @@ public class NativeNagaIntegrationTests
                 FindNativeNagaNode = node => NagaChromaButtons.FindReportNode(node, _root.FullName),
                 OpenNativeNagaButtons = (node, onKey, onLost) =>
                 {
-                    if (RejectNativeReader)
+                    bool rejectVendor = RejectVendorReader && node.Path == VendorPath;
+                    if (RejectNativeReader || rejectVendor && !FailVendorOnStart)
                         throw new UnauthorizedAccessException("Emulated input permission failure.");
-                    var reader = new ReportReader(node, onKey, onLost);
+                    var reader = new ReportReader(node, onKey, onLost, failOnStart: rejectVendor);
                     Readers[node.Path] = reader;
                     return reader;
                 },
@@ -610,6 +706,16 @@ public class NativeNagaIntegrationTests
         public void Send(ushort source, int value) => Session!.Dispatch(InputPath,
             new InputEvent { Type = EventTypes.Key, Code = source, Value = value });
 
+        public Task WaitForDpiQueue()
+        {
+            // The input dispatch enqueues synchronously. Wait for any work it scheduled before asserting no write.
+            var devices = (IDictionary)typeof(DeviceManager).GetField("_devices", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(Manager)!;
+            var device = devices[Info.Port]!;
+            var queue = (Task)device.GetType().GetProperty("DpiQueue")!.GetValue(device)!;
+            return queue.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }
+
         public void Scroll(ushort axis, int value) => Session!.Dispatch(InputPath,
             new InputEvent { Type = EventTypes.Rel, Code = axis, Value = value });
 
@@ -620,13 +726,18 @@ public class NativeNagaIntegrationTests
         }
     }
 
-    sealed class ReportReader(NagaReportNode node, Action<ushort, int> onKey, Action<Exception> onLost) : IHidrawButtonReader
+    sealed class ReportReader(NagaReportNode node, Action<ushort, int> onKey, Action<Exception> onLost, bool failOnStart) : IHidrawButtonReader
     {
         readonly NagaChromaButtons.Decoder _decoder = new(node, onKey);
         bool _started;
         public bool Disposed { get; private set; }
 
-        public void Start() => _started = true;
+        public void Start()
+        {
+            if (failOnStart)
+                throw new ThreadStateException("Emulated input reader startup failure.");
+            _started = true;
+        }
         public void Dispose() => Disposed = true;
         public void Lose() => onLost(new IOException("Emulated hidraw disconnect."));
 
@@ -684,6 +795,7 @@ public class NativeNagaIntegrationTests
         public DpiStage? ChangeBeforeNextRead { get; set; }
         public bool UnreadableNextDpi { get; set; }
         public bool RejectDpi { get; set; }
+        public bool RejectPollingRate { get; set; }
         public int Writes { get; private set; }
 
         public void SendFeature(ReadOnlySpan<byte> report) => _request = RazerReport.Parse(report[1..]);
@@ -719,6 +831,8 @@ public class NativeNagaIntegrationTests
                 data = "NAGATEST"u8.ToArray();
             else if ((request.CommandClass, request.CommandId) == (0x00, 0x81))
                 data = [1, 0];
+            else if ((request.CommandClass, request.CommandId) == (0x00, 0x05) && RejectPollingRate)
+                status = ReportStatus.Failure;
             RazerReport.Create(request.TransactionId, request.CommandClass, request.CommandId, data).Bytes.CopyTo(report[1..]);
             report[1] = (byte)status;
             return report.Length;

@@ -508,16 +508,19 @@ public sealed partial class StageRow(int number, PerformanceViewModel owner) : O
     public int DpiStep => owner.DpiStep;
     public bool SeparateXY => owner.SeparateXY;
     public bool ShowStage => !owner.SupportsManagedDpiSteps || owner.ManagedDpiSteps || Active;
-    public bool DisplayActive => owner.ManagedDpiSteps ? owner.ConfirmedDpiStep == Number - 1 : Active;
+    public bool DisplayActive => owner.ManagedDpiSteps
+        ? owner.ConfirmedDpiStep == Number - 1 && owner.LastConfirmedManagedDpi is { } dpi && X == dpi.X && Y == dpi.Y
+        : Active;
 
     internal void SeparateXYChanged() => OnPropertyChanged(nameof(SeparateXY));
+    internal void ConfirmedDpiChanged() => OnPropertyChanged(nameof(DisplayActive));
     internal void ManagedStepsChanged()
     {
         OnPropertyChanged(nameof(ShowStage));
         OnPropertyChanged(nameof(DisplayActive));
     }
-    [ObservableProperty] public partial double X { get; set; }
-    [ObservableProperty] public partial double Y { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayActive))] public partial double X { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayActive))] public partial double Y { get; set; }
     [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowStage), nameof(DisplayActive))] public partial bool Active { get; set; }
 
     partial void OnXChanged(double value) => owner.StageChanged(this, x: true);
@@ -580,10 +583,13 @@ public sealed partial class PerformanceViewModel : ObservableObject
         }
     }
 
-    partial void OnConfirmedDpiStepChanged(int? value)
+    partial void OnConfirmedDpiStepChanged(int? value) => NotifyConfirmedDpiChanged();
+    partial void OnLastConfirmedManagedDpiChanged(DpiStage? value) => NotifyConfirmedDpiChanged();
+
+    void NotifyConfirmedDpiChanged()
     {
         foreach (var row in Stages)
-            row.ManagedStepsChanged();
+            row.ConfirmedDpiChanged();
     }
 
     public void Load(PerformanceSettings settings)

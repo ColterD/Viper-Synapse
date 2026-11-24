@@ -80,11 +80,12 @@
                 <TextBlock Text="{Binding Status}" Classes="deviceStatusText statusWarning" TextWrapping="Wrap" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Classes="link" Content="Health" Click="ShowHealth" />
             </Grid>
-            <Grid Name="DeviceSaveStatus" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,0,0,8" IsVisible="{Binding HasSaveStatus}">
+            <Grid Name="DeviceSaveStatus" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="0,0,0,8" IsVisible="{Binding HasSaveStatus}">
                 <TextBlock Text="{Binding SaveStatus}" Classes="deviceDetail" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
                 <Button Grid.Column="1" Content="Retry save" IsVisible="{Binding CanRetrySave}" Command="{Binding RetrySaveCommand}" />
                 <Button Grid.Column="1" Content="Discard and reload…" IsVisible="{Binding CanReloadSave}" Command="{Binding RequestReloadSaveCommand}" />
                 <Button Grid.Column="1" Content="Return to binding" IsVisible="{Binding CanShowBindingSave}" Command="{Binding ShowBindingSaveCommand}" />
+                <Button Grid.Column="2" Content="Retry hardware" IsVisible="{Binding CanRetryHardwareApply}" Command="{Binding RetryHardwareApplyCommand}" />
             </Grid>
         </StackPanel>
 

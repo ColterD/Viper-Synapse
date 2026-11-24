@@ -2,6 +2,9 @@ using Microsoft.Extensions.Time.Testing;
 using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Engine;
 using ViperSynapse.Core.Input;
+using ViperSynapse.Hardware;
+using ViperSynapse.Hardware.Linux;
+using static ViperSynapse.Core.Devices.LegacyRemapControls;
 
 namespace ViperSynapse.Tests;
 
@@ -669,6 +672,117 @@ public class EngineTests
         engine.Key(A, 1); engine.Key(A, 0);
         Assert.Equal(["KEY_B:1", "KEY_B:0"], rec.Events);
     }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void An_incomplete_tilt_shortcut_preserves_the_mirrored_horizontal_wheel(bool wheelFirst, bool bindWheel)
+    {
+        var keymap = bindWheel ? Keymap.Empty("k").With(SourceKeys.WheelRight, new KeyboardBinding(C)) : Keymap.Empty("k");
+        var (engine, rec, time) = Make(keymap);
+        engine.NagaTiltReportsHorizontalWheel = engine.EvdevNagaTiltRight = true;
+        engine.NagaTiltShortcutSources = new HashSet<ushort> { NagaTiltRight };
+        rec.Shortcuts = new ShortcutList([GlobalShortcut.Create([NagaTiltRight, A], new KeyboardBinding(B))]);
+        using var session = new DeviceSession(engine, ThumbstickMode.Analog, time);
+
+        if (wheelFirst)
+        {
+            SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheelHiRes, 120);
+            SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, 1);
+        }
+        SendTiltInput(session, EventTypes.Key, NagaTiltRight, 1);
+        SendTiltInput(session, EventTypes.Key, NagaTiltRight, 0);
+        if (!wheelFirst)
+        {
+            SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheelHiRes, 120);
+            SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, 1);
+        }
+        time.Advance(TimeSpan.FromMilliseconds(25));
+
+        if (bindWheel)
+            Assert.Equal(["KEY_C:1", "KEY_C:0"], rec.Events);
+        else
+        {
+            Assert.Equal(2, rec.Events.Length);
+            Assert.Contains("REL6:1", rec.Events);
+            Assert.Contains("REL12:120", rec.Events);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_completed_tilt_shortcut_owns_its_hold_and_suppresses_the_mirrored_wheel(bool wheelFirst)
+    {
+        var (engine, rec, time) = Make(Keymap.Empty("k").With(A, new DisableBinding()));
+        engine.NagaTiltReportsHorizontalWheel = engine.EvdevNagaTiltRight = true;
+        engine.NagaTiltShortcutSources = new HashSet<ushort> { NagaTiltRight };
+        rec.Shortcuts = new ShortcutList([GlobalShortcut.Create([NagaTiltRight, A], new KeyboardBinding(B))]);
+        using var session = new DeviceSession(engine, ThumbstickMode.Analog, time);
+
+        SendTiltInput(session, EventTypes.Key, A, 1);
+        if (wheelFirst)
+            SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, 1);
+        SendTiltInput(session, EventTypes.Key, NagaTiltRight, 1);
+        if (!wheelFirst)
+            SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, 1);
+        time.Advance(TimeSpan.FromMilliseconds(25));
+        Assert.Equal(["KEY_B:1"], rec.Events);
+
+        SendTiltInput(session, EventTypes.Key, NagaTiltRight, 0);
+        SendTiltInput(session, EventTypes.Key, A, 0);
+        Assert.Equal(["KEY_B:1", "KEY_B:0"], rec.Events);
+    }
+
+    [Theory]
+    [InlineData(false, true, "KEY_B")]
+    [InlineData(true, false, "KEY_C")]
+    public void A_deferred_tilt_detent_uses_the_layer_active_when_it_arrives(bool shiftedAtArrival, bool shiftedAtExpiry, string key)
+    {
+        var keymap = Keymap.Empty("k").With(NagaTiltRight, new KeyboardBinding(B))
+            .With(NagaTiltRight, new KeyboardBinding(C), hypershift: true);
+        var (engine, rec, time) = Make(keymap);
+        engine.NagaTiltReportsHorizontalWheel = engine.EvdevNagaTiltRight = true;
+        using var session = new DeviceSession(engine, ThumbstickMode.Analog, time);
+
+        engine.HypershiftButton(shiftedAtArrival);
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, 1);
+        Assert.Empty(rec.Events);
+        engine.HypershiftButton(shiftedAtExpiry);
+        time.Advance(TimeSpan.FromMilliseconds(25));
+
+        Assert.Equal([$"{key}:1", $"{key}:0"], rec.Events);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_horizontal_wheel_binding_counts_only_the_available_detent_stream(bool highResOnly)
+    {
+        var (engine, rec, time) = Make(Keymap.Empty("k").With(SourceKeys.WheelRight, new KeyboardBinding(B))
+            .With(SourceKeys.WheelLeft, new KeyboardBinding(C)));
+        engine.NagaTiltReportsHorizontalWheel = engine.EvdevNagaTiltRight = engine.EvdevNagaTiltLeft = true;
+        engine.NagaHorizontalHighResOnly = highResOnly;
+        using var session = new DeviceSession(engine, ThumbstickMode.Analog, time);
+
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheelHiRes, 119);
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheelHiRes, -60);
+        Assert.Empty(rec.Events);
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheelHiRes, 1);
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheelHiRes, -60);
+        if (highResOnly)
+            Assert.Equal(["KEY_B:1", "KEY_B:0", "KEY_C:1", "KEY_C:0"], rec.Events);
+        else
+            Assert.Empty(rec.Events);
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, 1);
+        SendTiltInput(session, EventTypes.Rel, RelativeAxes.HWheel, -1);
+        Assert.Equal(["KEY_B:1", "KEY_B:0", "KEY_C:1", "KEY_C:0"], rec.Events);
+    }
+
+    static void SendTiltInput(DeviceSession session, ushort type, ushort code, int value) =>
+        session.Dispatch("/dev/input/emulated-naga", new InputEvent { Type = type, Code = code, Value = value });
 
     [Fact]
     public void Turbo_repeats_at_its_rate_and_stops_on_release()

@@ -14,7 +14,7 @@
 
 The binding editor shows the profile, keymap, and layer it opened for. If a game changes the active profile, the draft stays with its original target. Use **Tab** and **Shift+Tab** to reach the controls. **Capture key** listens for one key. Escape cancels capture, and Tab moves to the next control. Use **Choose key** to assign Tab or Escape.
 
-After saving, the device header distinguishes the saved software profile from the selected unit's firmware result. If the binding fails to save, the draft stays open and **Retry save** repeats the save. When the editor closes, keyboard focus returns to the control you edited. A separate firmware retry, when available, targets the original unit.
+After saving, the device header distinguishes the saved software profile from the selected unit's firmware result. If the binding fails to save, the draft stays open and **Retry save** repeats the save. A successful save for the same profile, keymap, layer, and control replaces any older failed attempt for that assignment. When the editor closes, keyboard focus returns to the control you edited. A separate firmware retry, when available, targets the original unit.
 
 **Linked Games** manages profile switching for supported running applications. If you want to change settings stored on the device, open **Onboard**, confirm the target unit and slot, and use the available slot controls. Backup and restore cover the settings shown for that unit.
 
@@ -22,7 +22,9 @@ After saving, the device header distinguishes the saved software profile from th
 
 For the wired Naga Chroma (`RZ01-0161`, `1532:0053`), open **Performance** and enable **Viper-managed DPI steps**. Use **Add step** or **Remove last step** to set up to five values and choose a **Startup step**. Enable **X-Y sensitivity** to set each axis separately. Select a numbered step to apply it now.
 
-While Viper is running, DPI Up and Down step through the saved values and stop at the ends. Explicit DPI button bindings and applicable shortcuts take precedence. The status shows the last confirmed setting when a write fails or when the mouse later reports a different DPI. Reopen **Performance** or use **Refresh** to read the live setting.
+While Viper is running, DPI Up and Down step through the saved values and stop at the ends. Explicit DPI button bindings and applicable shortcuts take precedence. Editing a step can change its displayed value before the device confirms it. The active highlight identifies a step whose displayed values match the last confirmation. Reopen **Performance** or use **Refresh** to read the live setting after a failed write or a later firmware change.
+
+If the native DPI reader cannot start, existing thumb-button remaps continue to work. Viper can use DPI button events from Linux when both directions are available. Check **Health** for a missing input route and use **Refresh** to retry it.
 
 Open **Customize** to assign the thumb buttons and tilt directions that are available on this connection. Use **Health** to check tilt input support. Tilt that arrives as wheel detents can trigger an assignment. Holding tilt for a binding or shortcut requires driver or native button press and release events.
 

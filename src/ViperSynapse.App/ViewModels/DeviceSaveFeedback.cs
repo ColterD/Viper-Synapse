@@ -8,10 +8,14 @@ using ViperSynapse.Core.Protocol;
 
 namespace ViperSynapse.App.ViewModels;
 
+internal sealed record BindingSaveTarget(Guid ProfileId, int KeymapIndex, string KeymapName, bool Hypershift, ushort Source);
+
 internal sealed record DeviceSaveFeedback(long Revision, bool Pending, DeviceSettings? Draft = null,
-    DeviceSettings? Baseline = null, IReadOnlyList<UnitApplyOutcome>? Units = null, Exception? Error = null,
+    DeviceSettings? Baseline = null, Exception? Error = null,
     string? DeviceName = null, Func<DeviceSettings, bool, DeviceSettings>? ApplyBinding = null, string? ReloadProblem = null,
-    DeviceSettings? Attempted = null);
+    DeviceSettings? Attempted = null, BindingSaveTarget? BindingTarget = null);
+
+internal sealed record DeviceApplyFeedback(IReadOnlyList<UnitApplyOutcome>? Units, bool Pending = false);
 
 public sealed record DeviceSaveNotice(string Key, string Message, DeviceViewModel? Device)
 {
@@ -21,6 +25,7 @@ public sealed record DeviceSaveNotice(string Key, string Message, DeviceViewMode
 public sealed partial class MainViewModel
 {
     readonly Dictionary<string, DeviceSaveFeedback> _deviceSaveFeedback = [];
+    readonly Dictionary<string, DeviceApplyFeedback> _deviceApplyFeedback = [];
     readonly Dictionary<string, DeviceSaveFeedback> _ordinarySaveFailures = [];
     readonly Dictionary<(string Key, long Revision), DeviceSaveFeedback> _bindingSaveFailures = [];
     readonly Dictionary<string, (long Revision, DeviceSettings Settings)> _committedDeviceSettings = [];
@@ -40,13 +45,20 @@ public sealed partial class MainViewModel
             return ordinary;
         if (binding is { Error: SettingsConflictException })
             return binding;
-        return ordinary ?? binding ?? latest;
+        return ordinary ?? binding;
     }
 
     internal DeviceSaveFeedback? GetBindingFailure(string key) => _bindingSaveFailures
         .Where(entry => entry.Key.Key == key).Select(entry => entry.Value)
         .OrderByDescending(failure => failure.Error is SettingsConflictException)
         .ThenByDescending(failure => failure.Revision).FirstOrDefault();
+
+    internal bool HasSettingsConflict(string key) => _ordinarySaveFailures.GetValueOrDefault(key)?.Error is SettingsConflictException ||
+        _bindingSaveFailures.Any(entry => entry.Key.Key == key && entry.Value.Error is SettingsConflictException);
+
+    internal bool HasUnsavedProfileSettings(string key) => _ordinarySaveFailures.ContainsKey(key) || HasSettingsConflict(key);
+
+    internal DeviceApplyFeedback? GetApplyFeedback(string key) => _deviceApplyFeedback.GetValueOrDefault(key);
 
     void SetSaveFeedback(string key, DeviceSaveFeedback feedback)
     {
@@ -110,6 +122,10 @@ public sealed partial class MainViewModel
             _bindingSaveFailures.Remove((key, retryBindingRevision));
             if (error != null)
                 _bindingSaveFailures[(key, request.Revision)] = failed;
+            else if (request.BindingTarget is { } target)
+                foreach (var older in _bindingSaveFailures.Where(entry => entry.Key.Key == key &&
+                    entry.Key.Revision < request.Revision && entry.Value.BindingTarget == target).Select(entry => entry.Key).ToArray())
+                    _bindingSaveFailures.Remove(older);
         }
         else if (error != null)
         {
@@ -118,6 +134,7 @@ public sealed partial class MainViewModel
         if (error == null)
         {
             _committedDeviceSettings[key] = (request.Revision, attempted);
+            _deviceApplyFeedback[key] = new(units);
             foreach (var device in Devices.Where(device => device.Key == key))
                 device.InitializeSavedSettings(attempted);
             if (_ordinarySaveFailures.TryGetValue(key, out var ordinary) &&
@@ -125,12 +142,7 @@ public sealed partial class MainViewModel
                 _ordinarySaveFailures.Remove(key);
         }
         if (_deviceSaveFeedback.GetValueOrDefault(key)?.Revision == request.Revision)
-        {
-            if (error == null)
-                _deviceSaveFeedback[key] = new(request.Revision, false, Units: units, DeviceName: request.DeviceName);
-            else
-                _deviceSaveFeedback.Remove(key);
-        }
+            _deviceSaveFeedback.Remove(key);
         NotifyDeviceSaveFeedback(key);
     }
 
@@ -160,35 +172,38 @@ public sealed partial class MainViewModel
         NotifyDeviceSaveFeedback(key);
     }
 
-    internal async Task RetrySaveAsync(string key, UnitApplyOutcome? unit)
+    internal async Task RetrySaveAsync(string key)
     {
-        if (GetSaveFeedback(key) is not { Pending: false } current)
+        if (GetSaveFeedback(key) is not { Pending: false, Draft: { } draft, Error: not SettingsConflictException } current)
             return;
-        if (current.Draft is { } draft)
+        if (current.ApplyBinding is not { } applyBinding)
         {
-            if (current.ApplyBinding is not { } applyBinding)
-                await SaveDeviceSettings(key, draft, current.Baseline).ConfigureAwait(false);
-            else
-            {
-                var baseline = _committedDeviceSettings.TryGetValue(key, out var committed) && committed.Revision > current.Revision
-                    ? committed.Settings : current.Baseline;
-                await SaveDeviceSettings(key, draft, baseline, applyBinding,
-                    error =>
-                    {
-                        if (error == null)
-                            foreach (var device in Devices.Where(device => device.Key == key))
-                                device.ApplySavedBinding(settings => applyBinding(settings, false));
-                    }, current.Revision).ConfigureAwait(false);
-            }
+            await SaveDeviceSettings(key, draft, current.Baseline).ConfigureAwait(false);
             return;
         }
-        if (unit == null || current.Units == null)
+        var baseline = _committedDeviceSettings.TryGetValue(key, out var committed) && committed.Revision > current.Revision
+            ? committed.Settings : current.Baseline;
+        await SaveDeviceSettings(key, draft, baseline, applyBinding,
+            error =>
+            {
+                if (error == null)
+                    foreach (var device in Devices.Where(device => device.Key == key))
+                        device.ApplySavedBinding(settings => applyBinding(settings, false));
+            }, current.Revision, current.BindingTarget).ConfigureAwait(false);
+    }
+
+    internal async Task RetryHardwareApplyAsync(string key, UnitApplyOutcome unit)
+    {
+        if (GetSaveFeedback(key) is { Pending: true } ||
+            GetApplyFeedback(key) is not { Pending: false, Units: { } units } current || !units.Contains(unit))
             return;
-        SetSaveFeedback(key, current with { Pending = true });
+        var pending = current with { Pending = true };
+        _deviceApplyFeedback[key] = pending;
+        NotifyDeviceSaveFeedback(key);
         UnitApplyOutcome result;
         try
         {
-            result = await Client.RetryUnitApplyAsync(key, unit).ConfigureAwait(false);
+            result = await RetryUnitApplyAsync(key, unit).ConfigureAwait(false);
         }
         catch (Exception e)
         {
@@ -196,8 +211,10 @@ public sealed partial class MainViewModel
         }
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            if (GetSaveFeedback(key)?.Revision == current.Revision)
-                SetSaveFeedback(key, current with { Units = current.Units.Select(item => item == unit ? result : item).ToArray() });
+            if (!ReferenceEquals(GetApplyFeedback(key), pending))
+                return;
+            _deviceApplyFeedback[key] = new(units.Select(item => item == unit ? result : item).ToArray());
+            NotifyDeviceSaveFeedback(key);
         });
     }
 }
@@ -207,46 +224,63 @@ public sealed partial class DeviceViewModel
     [ObservableProperty]
     public partial bool ReloadingSave { get; private set; }
 
-    UnitApplyOutcome? SelectedApplyOutcome => _main.GetSaveFeedback(Key)?.Units?.FirstOrDefault(unit =>
+    UnitApplyOutcome? SelectedApplyOutcome => _main.GetApplyFeedback(Key)?.Units?.FirstOrDefault(unit =>
         unit.Port == Info.Port && unit.ProductId == Info.ProductId && unit.Serial == Info.Serial);
 
     public string SaveStatus
     {
         get
         {
-            if (_main.GetSaveFeedback(Key) is not { } feedback)
-                return "";
-            if (IsCustomize && OwnsBindingSave(feedback.Revision) && (feedback.Pending || feedback.Error != null))
-                return "";
-            if (feedback.Pending)
-                return feedback.Draft == null ? "Retrying hardware…" : "Saving…";
-            if (feedback.ReloadProblem is { } problem)
-                return problem;
-            if (feedback.Error is SettingsConflictException)
-                return "The saved profile changed. Discard your unsaved profile edits and reload to continue.";
-            if (CanShowBindingSave)
-                return "Couldn't save this binding. Return to the binding editor to retry.";
-            if (feedback.Error != null)
-                return "Couldn't save to the software profile.";
-            string result = SelectedApplyOutcome switch
+            var save = _main.GetSaveFeedback(Key);
+            var apply = _main.GetApplyFeedback(Key);
+            string software = save switch
             {
-                { Status: UnitApplyStatus.Failed or UnitApplyStatus.Unavailable or UnitApplyStatus.Disconnected, Detail: { } detail } => detail,
-                { ReadbackConfirmations: > 0 } unit => $"Device reported {unit.ReadbackConfirmations} readback confirmations",
-                { Status: UnitApplyStatus.Acknowledged } => "Device acknowledged the commands",
-                { Status: UnitApplyStatus.NoFirmwareChanges } => "No firmware changes were sent",
+                null => "",
+                { } feedback when IsCustomize && OwnsBindingSave(feedback.Revision) => "",
+                { Pending: true } => "Saving…",
+                { ReloadProblem: { } problem } => problem,
+                { Error: SettingsConflictException } => "The saved profile changed. Discard your unsaved profile edits and reload to continue.",
+                _ when CanShowBindingSave => "Couldn't save this binding. Return to the binding editor to retry.",
+                { Error: not null } => "Couldn't save to the software profile.",
                 _ => "",
             };
-            int other = feedback.Units?.Count(unit => unit.Port != Info.Port && unit.Status == UnitApplyStatus.Failed) ?? 0;
-            return "Saved to profile" + (result.Length > 0 ? $" · {result}" : "") +
-                (other > 0 ? $" · {other} other unit(s) need attention" : "");
+            if (apply == null)
+                return software;
+            var selected = SelectedApplyOutcome;
+            int other = apply.Units?.Count(unit => unit != selected && unit.Status == UnitApplyStatus.Failed) ?? 0;
+            bool needsAttention = selected?.Status is UnitApplyStatus.Failed or UnitApplyStatus.Unavailable or UnitApplyStatus.Disconnected;
+            if (save != null && !apply.Pending && !needsAttention && other == 0)
+                return software;
+            string hardware = apply.Pending ? "Retrying hardware…" : software.Length > 0 ? "Last saved profile" : "Saved to profile";
+            if (!apply.Pending)
+            {
+                string detail = selected switch
+                {
+                    { Detail.Length: > 0 } unit when needsAttention => unit.Detail,
+                    { Status: UnitApplyStatus.Failed } => "Couldn't apply the saved profile to this device",
+                    { Status: UnitApplyStatus.Unavailable } => "Firmware control is unavailable",
+                    { Status: UnitApplyStatus.Disconnected } => "The device disconnected",
+                    { ReadbackConfirmations: > 0 } unit => $"Device reported {unit.ReadbackConfirmations} readback confirmations",
+                    { Status: UnitApplyStatus.Acknowledged } => "Device acknowledged the commands",
+                    { Status: UnitApplyStatus.NoFirmwareChanges } => "No firmware changes were sent",
+                    _ => "",
+                };
+                if (detail.Length > 0)
+                    hardware += $" · {detail}";
+                if (other > 0)
+                    hardware += $" · {other} other unit(s) need attention";
+            }
+            return software.Length > 0 ? $"{software}\n{hardware}" : hardware;
         }
     }
 
     public bool HasSaveStatus => SaveStatus.Length > 0;
 
-    public bool CanRetrySave => _main.GetSaveFeedback(Key) is { Pending: false } feedback &&
-        (feedback.Draft != null ? feedback.Error is not SettingsConflictException && !OwnsBindingSave(feedback.Revision)
-            : SelectedApplyOutcome is { Status: UnitApplyStatus.Failed, Serial.Length: > 0 });
+    public bool CanRetrySave => _main.GetSaveFeedback(Key) is { Pending: false, Draft: not null, Error: not SettingsConflictException } feedback &&
+        !OwnsBindingSave(feedback.Revision);
+
+    public bool CanRetryHardwareApply => !_detached && _main.GetSaveFeedback(Key) is not { Pending: true } &&
+        _main.GetApplyFeedback(Key) is { Pending: false } && SelectedApplyOutcome is { Status: UnitApplyStatus.Failed, Serial.Length: > 0 };
 
     public bool CanReloadSave => _main.GetSaveFeedback(Key) is { Pending: false, Error: SettingsConflictException };
 
@@ -261,7 +295,11 @@ public sealed partial class DeviceViewModel
     }
 
     [RelayCommand]
-    Task RetrySave() => CanRetrySave ? _main.RetrySaveAsync(Key, SelectedApplyOutcome) : Task.CompletedTask;
+    Task RetrySave() => CanRetrySave ? _main.RetrySaveAsync(Key) : Task.CompletedTask;
+
+    [RelayCommand]
+    Task RetryHardwareApply() => CanRetryHardwareApply && SelectedApplyOutcome is { } unit
+        ? _main.RetryHardwareApplyAsync(Key, unit) : Task.CompletedTask;
 
     [RelayCommand]
     void RequestReloadSave()
@@ -328,6 +366,7 @@ public sealed partial class DeviceViewModel
         OnPropertyChanged(nameof(SaveStatus));
         OnPropertyChanged(nameof(HasSaveStatus));
         OnPropertyChanged(nameof(CanRetrySave));
+        OnPropertyChanged(nameof(CanRetryHardwareApply));
         OnPropertyChanged(nameof(CanReloadSave));
         OnPropertyChanged(nameof(CanShowBindingSave));
     }
