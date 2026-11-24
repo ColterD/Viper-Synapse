@@ -197,9 +197,12 @@ public class NativeNagaIntegrationTests
         device.Send(NagaDpiDown, 0);
         await updated.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Assert.Equal(0, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
+        var revisionBeforeReconnect = device.Info.ManagedDpiRevision;
+        Assert.True(revisionBeforeReconnect > 0);
         device.Disconnect();
         device.RefreshWithControl(MouseNode());
         Assert.Equal(1, device.Manager.ReadState(ProductKey)?.ManagedDpiStep);
+        Assert.True(device.Info.ManagedDpiRevision > revisionBeforeReconnect);
         Assert.Equal(new DpiStage(1250, 1250), device.Firmware.Current);
         device.SwitchProfile(Profile.Create("Precision") with
         {
@@ -261,7 +264,8 @@ public class NativeNagaIntegrationTests
         device.Scroll(RelativeAxes.HWheel, 1);
         device.Output.NextKeyFailure = failure;
         device.AdvanceTiltWindow();
-        Assert.Equal((InputPath, (Exception)failure), observed);
+        Assert.Equal(InputPath, observed?.Path);
+        Assert.Same(failure, observed?.Error);
     }
 
     [Fact]

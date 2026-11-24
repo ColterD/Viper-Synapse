@@ -58,6 +58,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     DpiStage? _lastConfirmedManagedDpi;
     bool _managedDpiEntryPending;
     string? _managedDpiProblem;
+    // Replacing a control endpoint must not reuse a revision the UI has already seen.
     static long _nextDpiRevision;
     long _managedDpiRevision;
     internal long ManagedDpiRevision => Volatile.Read(ref _managedDpiRevision);

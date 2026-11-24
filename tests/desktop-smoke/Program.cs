@@ -322,8 +322,11 @@ static class Program
         await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_ESC", "Choose key could not assign Escape.");
         await TabToAsync(window, capture);
         await KeyAsync("space");
+        await UntilAsync(() => capture.IsFocused && Equals(capture.Content, "Listening…"),
+            "Capture did not enter listening mode with keyboard focus.");
         await KeyAsync("F8");
-        Require(KeyCodes.Name(draft.CapturedKey) == "KEY_F8" && Equals(capture.Content, "Capture key"), "Capture was not one-shot.");
+        await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_F8", "Capture did not receive F8.");
+        await UntilAsync(() => Equals(capture.Content, "Capture key"), "Capture kept listening after receiving F8.");
         await TabToAsync(window, save);
         await CaptureAsync("remap-save-focused");
         var position = save.TranslatePoint(new Point(0, save.Bounds.Height), window);
