@@ -321,7 +321,8 @@ static class Program
         await KeyAsync("Return");
         await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_ESC", "Choose key could not assign Escape.");
         await TabToAsync(window, capture);
-        await KeyAsync("space");
+        // Send Space by its private evdev keycode so arming cannot also restore a modifier.
+        await NativeInputAsync("key", "65");
         await UntilAsync(() => capture.IsFocused && Equals(capture.Content, "Listening…"),
             "Capture did not enter listening mode with keyboard focus.");
         KeyEventArgs? input = null;
@@ -329,8 +330,8 @@ static class Program
         window.AddHandler(InputElement.KeyDownEvent, ObserveInput, RoutingStrategies.Tunnel, handledEventsToo: true);
         try
         {
-            // Clearing modifiers can send a synthetic key-down before the one-shot capture key.
-            await NativeInputAsync("key", "F8");
+            // Send the private evdev keymap's F8 keycode. Older xdotool versions can add Alt when resolving the F8 keysym.
+            await NativeInputAsync("key", "74");
             await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_F8", "Capture did not receive F8.");
         }
         catch (TimeoutException)
