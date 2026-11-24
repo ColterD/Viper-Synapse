@@ -227,8 +227,11 @@ public sealed class DeviceSession : IDisposable
     {
         lock (_engineGate)
         {
-            if (_stopping || !_nagaReaders.TryGetValue(path, out var current) || !ReferenceEquals(current.Reader, reader) ||
-                !(current.Tilt && LegacyRemapControls.IsNagaTiltSource(source) || current.Dpi && LegacyRemapControls.IsNagaDpiSource(source)))
+            if (_stopping || !_nagaReaders.TryGetValue(path, out var current) || !ReferenceEquals(current.Reader, reader))
+                return;
+            bool routesTilt = current.Tilt && LegacyRemapControls.IsNagaTiltSource(source);
+            bool routesDpi = current.Dpi && LegacyRemapControls.IsNagaDpiSource(source);
+            if (!routesTilt && !routesDpi)
                 return;
             DispatchKey(path, source, value);
             Engine.Sync();
