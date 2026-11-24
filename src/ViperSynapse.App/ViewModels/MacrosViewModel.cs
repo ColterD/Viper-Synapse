@@ -624,12 +624,12 @@ public sealed partial class MacrosViewModel(DaemonClient client, MainViewModel m
     public ObservableCollection<MacroAssignment> Assignments { get; } = [];
 
     [ObservableProperty] public partial bool Assigning { get; set; }
-    [ObservableProperty] public partial DeviceViewModel? AssignDevice { get; set; }
-    [ObservableProperty] public partial DeviceKey? AssignKey { get; set; }
-    [ObservableProperty] public partial Macro? AssignMacro { get; set; }
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(AssignCommand))] public partial DeviceViewModel? AssignDevice { get; set; }
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(AssignCommand))] public partial DeviceKey? AssignKey { get; set; }
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(AssignCommand))] public partial Macro? AssignMacro { get; set; }
     [ObservableProperty] public partial Choice<MacroPlayback> AssignPlayback { get; set; } = BindingEditorViewModel.Playbacks[0];
 
-    public IEnumerable<DeviceViewModel> Devices => main.Devices;
+    public IEnumerable<DeviceViewModel> Devices => main.Devices.Where(device => device.HasSoftwareSettings);
     public IReadOnlyList<DeviceKey> AssignKeys => AssignDevice?.Rows.Where(r => r.Bindable).Select(r => r.Key).ToList() ?? [];
 
     partial void OnAssignDeviceChanged(DeviceViewModel? value)
@@ -648,7 +648,7 @@ public sealed partial class MacrosViewModel(DaemonClient client, MainViewModel m
     public void RefreshAssignments()
     {
         Assignments.Clear();
-        foreach (var device in main.Devices)
+        foreach (var device in Devices)
         {
             var keymap = device.CurrentSettings.ActiveKeymapOrFirst;
             foreach (var row in device.Rows)
@@ -656,20 +656,30 @@ public sealed partial class MacrosViewModel(DaemonClient client, MainViewModel m
                     Assignments.Add(new MacroAssignment(device, row.Key, m, Library.Find(m.MacroId)?.Name ?? "missing"));
         }
         OnPropertyChanged(nameof(Devices));
+        if (AssignDevice != null && !Devices.Contains(AssignDevice))
+            AssignDevice = null;
+        AssignCommand.NotifyCanExecuteChanged();
+        StartAssigningCommand.NotifyCanExecuteChanged();
     }
 
-    [RelayCommand]
+    bool CanStartAssigning => Devices.Any();
+
+    [RelayCommand(CanExecute = nameof(CanStartAssigning))]
     void StartAssigning()
     {
+        if (!CanStartAssigning)
+            return;
         Assigning = true;
-        AssignDevice ??= main.Devices.FirstOrDefault();
+        AssignDevice ??= Devices.FirstOrDefault();
         AssignMacro ??= SelectedMacro ?? Macros.FirstOrDefault();
     }
 
-    [RelayCommand]
+    bool CanAssign => AssignDevice is { } device && Devices.Contains(device) && AssignKey != null && AssignMacro != null;
+
+    [RelayCommand(CanExecute = nameof(CanAssign))]
     void Assign()
     {
-        if (AssignDevice is not { } device || AssignKey is not { } key || AssignMacro is not { } macro)
+        if (!CanAssign || AssignDevice is not { } device || AssignKey is not { } key || AssignMacro is not { } macro)
             return;
         device.Bind(key, new MacroBinding(macro.Id, AssignPlayback.Value, 2));
         Assigning = false;
@@ -679,6 +689,8 @@ public sealed partial class MacrosViewModel(DaemonClient client, MainViewModel m
     [RelayCommand]
     void Unassign(MacroAssignment assignment)
     {
+        if (!Devices.Contains(assignment.Device))
+            return;
         assignment.Device.Bind(assignment.Key, DefaultBinding.Instance);
         RefreshAssignments();
     }

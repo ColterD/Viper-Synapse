@@ -15,10 +15,16 @@ sealed class Debounce(Action action)
     internal static TimeSpan Delay { get; set; } = TimeSpan.FromMilliseconds(300);
 
     readonly DispatcherTimer _timer = new(DispatcherPriority.Background) { Interval = Delay };
-    bool _wired;
+    bool _wired, _paused, _pendingWhilePaused;
 
     public void Poke()
     {
+        ++EditRevision;
+        if (_paused)
+        {
+            _pendingWhilePaused = true;
+            return;
+        }
         if (!_wired)
         {
             _timer.Tick += (_, _) => { _timer.Stop(); action(); };
@@ -28,14 +34,29 @@ sealed class Debounce(Action action)
         _timer.Start();
     }
 
-    public bool IsPending => _timer.IsEnabled;
+    public bool IsPending => _timer.IsEnabled || _pendingWhilePaused;
+    public long EditRevision { get; private set; }
+
+    public void Pause()
+    {
+        _pendingWhilePaused = IsPending;
+        _paused = true;
+        _timer.Stop();
+    }
+
+    public void Resume()
+    {
+        _paused = false;
+        if (StopPending())
+            Poke();
+    }
 
     public bool StopPending()
     {
-        if (!_timer.IsEnabled)
-            return false;
+        bool pending = IsPending;
+        _pendingWhilePaused = false;
         _timer.Stop();
-        return true;
+        return pending;
     }
 }
 
@@ -408,8 +429,11 @@ public sealed partial class LightingViewModel : ObservableObject
     void Commit() => _save(Current());
 
     internal bool HasPendingEdits => _debounce.IsPending;
+    internal long EditRevision => _debounce.EditRevision;
 
     internal LightingSettings? TakePendingSettings() => _debounce.StopPending() ? Current() : null;
+    internal void PausePendingEdits() => _debounce.Pause();
+    internal void ResumePendingEdits() => _debounce.Resume();
 
     ZoneLighting? LegacyFrameSetting() => Zones.Select(zone => _zones.GetValueOrDefault(zone))
         .FirstOrDefault(setting => setting?.Effect.Kind == EffectKind.Custom);
@@ -483,11 +507,21 @@ public sealed partial class StageRow(int number, PerformanceViewModel owner) : O
     public int DpiMax => owner.DpiMax;
     public int DpiStep => owner.DpiStep;
     public bool SeparateXY => owner.SeparateXY;
+    public bool ShowStage => !owner.SupportsManagedDpiSteps || owner.ManagedDpiSteps || Active;
+    public bool DisplayActive => owner.ManagedDpiSteps
+        ? owner.ConfirmedDpiStep == Number - 1 && owner.LastConfirmedManagedDpi is { } dpi && X == dpi.X && Y == dpi.Y
+        : Active;
 
     internal void SeparateXYChanged() => OnPropertyChanged(nameof(SeparateXY));
-    [ObservableProperty] public partial double X { get; set; }
-    [ObservableProperty] public partial double Y { get; set; }
-    [ObservableProperty] public partial bool Active { get; set; }
+    internal void ConfirmedDpiChanged() => OnPropertyChanged(nameof(DisplayActive));
+    internal void ManagedStepsChanged()
+    {
+        OnPropertyChanged(nameof(ShowStage));
+        OnPropertyChanged(nameof(DisplayActive));
+    }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayActive))] public partial double X { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayActive))] public partial double Y { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowStage), nameof(DisplayActive))] public partial bool Active { get; set; }
 
     partial void OnXChanged(double value) => owner.StageChanged(this, x: true);
     partial void OnYChanged(double value) => owner.StageChanged(this, x: false);
@@ -508,18 +542,55 @@ public sealed partial class PerformanceViewModel : ObservableObject
         DpiStep = model?.Has("onboard_profiles") == true ? 1 : 50;
         PollRates = model?.PollRates.Count > 0 ? model.PollRates : [125, 500, 1000];
         HasStages = model?.Has("dpi_stages") == true;
+        SupportsManagedDpiSteps = model?.ProductId == LegacyRemapControls.NagaChroma;
     }
 
     public int DpiMax { get; }
     public int DpiStep { get; }
     public bool HasStages { get; }
+    public bool SupportsManagedDpiSteps { get; }
+    [ObservableProperty] public partial bool ManagedDpiSteps { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ManagedDpiStatus))] public partial bool ManagedDpiAvailable { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ManagedDpiStatus))] public partial int? ConfirmedDpiStep { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ManagedDpiStatus))] public partial string? ManagedDpiProblem { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ManagedDpiStatus))] public partial DpiStage? LastConfirmedManagedDpi { get; set; }
+
+    public string ManagedDpiStatus
+    {
+        get
+        {
+            var problem = ManagedDpiProblem ?? (!ManagedDpiAvailable ? "DPI button input is unavailable. Check Device Health." : null);
+            if (problem != null)
+                return LastConfirmedManagedDpi is { } dpi ? $"{problem} Last confirmed {dpi.X} × {dpi.Y} DPI." : problem;
+            return ConfirmedDpiStep is int step ? $"Mouse confirmed step {step + 1}." : "Waiting for the mouse to confirm a step.";
+        }
+    }
     public IReadOnlyList<int> PollRates { get; }
     public ObservableCollection<StageRow> Stages { get; } = [];
 
     [ObservableProperty] public partial double StageCount { get; set; } = 5;
     [ObservableProperty] public partial bool SeparateXY { get; set; }
     [ObservableProperty] public partial int PollingRate { get; set; }
-    [ObservableProperty] public partial int ActiveStage { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(StartupStep))] public partial int ActiveStage { get; set; }
+
+    public int StartupStep
+    {
+        get => ActiveStage + 1;
+        set
+        {
+            if (value >= 1 && value <= Stages.Count && value != StartupStep)
+                Activate(Stages[value - 1]);
+        }
+    }
+
+    partial void OnConfirmedDpiStepChanged(int? value) => NotifyConfirmedDpiChanged();
+    partial void OnLastConfirmedManagedDpiChanged(DpiStage? value) => NotifyConfirmedDpiChanged();
+
+    void NotifyConfirmedDpiChanged()
+    {
+        foreach (var row in Stages)
+            row.ConfirmedDpiChanged();
+    }
 
     public void Load(PerformanceSettings settings)
     {
@@ -540,6 +611,7 @@ public sealed partial class PerformanceViewModel : ObservableObject
             SeparateXY = settings.Stages.Any(s => s.X != s.Y);
             // 0 = not known: nothing is shown chosen rather than a guess.
             PollingRate = settings.PollingRate;
+            ManagedDpiSteps = SupportsManagedDpiSteps && settings.ManagedDpiSteps;
             // The count often stays the same across a load, which raises nothing; the switch must still re-read it.
             OnPropertyChanged(nameof(StagesEnabled));
         }
@@ -547,6 +619,14 @@ public sealed partial class PerformanceViewModel : ObservableObject
         {
             _loading = false;
         }
+    }
+
+    partial void OnManagedDpiStepsChanged(bool value)
+    {
+        foreach (var row in Stages)
+            row.ManagedStepsChanged();
+        if (!_loading)
+            _debounce.Poke();
     }
 
     internal void StageChanged(StageRow row, bool x)
@@ -636,13 +716,19 @@ public sealed partial class PerformanceViewModel : ObservableObject
     void Commit() => _save(Current());
 
     internal bool HasPendingEdits => _debounce.IsPending;
+    internal long EditRevision => _debounce.EditRevision;
 
     internal PerformanceSettings? TakePendingSettings() => _debounce.StopPending() ? Current() : null;
+    internal void PausePendingEdits() => _debounce.Pause();
+    internal void ResumePendingEdits() => _debounce.Resume();
 
     PerformanceSettings Current()
     {
         var stages = Stages.Select(s => new DpiStage(Round(s.X), Round(SeparateXY ? s.Y : s.X))).ToList();
-        return new PerformanceSettings(stages, Math.Clamp(ActiveStage, 0, Math.Max(0, stages.Count - 1)), PollingRate);
+        return new PerformanceSettings(stages, Math.Clamp(ActiveStage, 0, Math.Max(0, stages.Count - 1)), PollingRate)
+        {
+            ManagedDpiSteps = SupportsManagedDpiSteps && ManagedDpiSteps,
+        };
     }
 
     int Round(double dpi) => Math.Clamp((int)Math.Round(dpi / DpiStep) * DpiStep, 100, DpiMax);

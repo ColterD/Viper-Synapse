@@ -56,7 +56,7 @@ public sealed partial class LinkedGamesViewModel(MainViewModel main) : TabViewMo
 
     [ObservableProperty] public partial string SelectedView { get; set; } = "GAMES";
     [ObservableProperty] public partial string NewProgram { get; set; } = "";
-    [ObservableProperty] public partial GameRow? SelectedGame { get; set; }
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RemoveGameCommand))] public partial GameRow? SelectedGame { get; set; }
 
     public ObservableCollection<GameRow> Games { get; } = [];
     public ObservableCollection<DeviceGames> DeviceList { get; } = [];
@@ -97,6 +97,7 @@ public sealed partial class LinkedGamesViewModel(MainViewModel main) : TabViewMo
             DeviceList.Add(new DeviceGames(device, lines));
         }
         OnPropertyChanged(nameof(HasDevices));
+        RemoveGameCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>"game.exe" and "/home/me/Games/Game/game.exe" both show as "game".</summary>
@@ -124,10 +125,12 @@ public sealed partial class LinkedGamesViewModel(MainViewModel main) : TabViewMo
         SelectedGame = Games.FirstOrDefault(g => string.Equals(g.Program, program, StringComparison.OrdinalIgnoreCase));
     }
 
-    [RelayCommand]
+    bool CanRemoveGame => SelectedGame != null && main.Devices.All(device => device.HasSoftwareSettings);
+
+    [RelayCommand(CanExecute = nameof(CanRemoveGame))]
     void RemoveGame()
     {
-        if (SelectedGame is not { } game)
+        if (!CanRemoveGame || SelectedGame is not { } game)
             return;
         _unlinked.RemoveAll(p => string.Equals(p, game.Program, StringComparison.OrdinalIgnoreCase));
         foreach (var device in main.Devices)
@@ -139,6 +142,8 @@ public sealed partial class LinkedGamesViewModel(MainViewModel main) : TabViewMo
     /// <summary>Links the game to one profile of the device (taking it off the device's other profiles), or to none.</summary>
     public void Link(string program, DeviceViewModel device, Guid? profileId)
     {
+        if (!device.HasSoftwareSettings || !main.Devices.Contains(device))
+            return;
         device.LinkProgram(program, profileId);
         if (profileId == null)
         {

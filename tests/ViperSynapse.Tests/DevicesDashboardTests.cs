@@ -116,12 +116,16 @@ public sealed class DevicesDashboardTests
             window.Show();
             try
             {
-                await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([Mouse(), Keyboard]));
+                var healthy = Mouse() with { InputNodes = ["/dev/emulated-input"], ControlReady = true };
+                var limited = Mouse("usb-limited") with { ControlReady = false, ControlIssue = "Emulated control problem" };
+                var keyboard = Keyboard with { InputNodes = ["/dev/emulated-keyboard"], Remapping = true, ControlReady = true };
+                await main.RefreshDevicesAsync(() => Task.FromResult<IReadOnlyList<DeviceInfo>>([healthy, limited, keyboard]));
                 window.UpdateLayout();
                 var grid = Assert.Single(home.GetVisualDescendants().OfType<UniformGrid>());
                 Assert.Equal(2, grid.Children.Count);
                 Assert.Equal(grid.Children[0].Bounds.X, grid.Children[1].Bounds.X);
                 Assert.True(grid.Children[0].Bounds.Y < grid.Children[1].Bounds.Y);
+                Assert.True(grid.Children[0].Bounds.Height != grid.Children[1].Bounds.Height);
                 var button = grid.Children[0].GetVisualDescendants().OfType<Button>().First();
                 Assert.True(button.Focus());
 

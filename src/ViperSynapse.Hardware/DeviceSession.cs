@@ -54,11 +54,41 @@ public sealed class DeviceSession : IDisposable
     readonly List<EvdevDevice> _nodes = [];
     readonly List<Thread> _threads = [];
     readonly Lock _engineGate = new();
+    static readonly TimeSpan TiltMirrorWindow = TimeSpan.FromMilliseconds(25);
+    readonly TimeProvider _time;
+    TiltRoute? _tiltLeft, _tiltRight;
+    ITimer? _tiltTimer;
+    string? _tiltWheelPath;
+
+    sealed class TiltRoute(ushort source)
+    {
+        public ushort Source { get; } = source;
+        public Queue<DetentBatch> Pending { get; } = [];
+        public Queue<TiltButton> Buttons { get; } = [];
+        public TiltButton? Held;
+        public int Remainder;
+    }
+
+    sealed class TiltButton(long at)
+    {
+        public long At { get; } = at;
+        public bool Released;
+        public bool ConsumesWheel;
+        public List<(long Count, bool Hypershift)> DeferredScroll { get; } = [];
+    }
+
+    sealed class DetentBatch(long at, long count, bool hypershift)
+    {
+        public long At { get; } = at;
+        public long Count = count;
+        public bool Hypershift { get; } = hypershift;
+    }
     // Composite devices may advertise one Linux key code on several interfaces.
     readonly Dictionary<ushort, HashSet<string>> _keyNodes = [];
     IDisposable? _macroReader;
     IDisposable? _macroMode;
-    readonly List<IDisposable> _nagaReaders = [];
+    sealed record NativeNagaReader(IHidrawButtonReader Reader, bool Tilt, bool Dpi);
+    readonly Dictionary<string, NativeNagaReader> _nagaReaders = new(StringComparer.Ordinal);
     internal bool HasNativeNagaTilt { get; private set; }
     internal bool HasNativeNagaDpi { get; private set; }
     volatile bool _stopping;
@@ -77,6 +107,29 @@ public sealed class DeviceSession : IDisposable
         }
     }
 
+    internal void DetachNativeMacroKeys()
+    {
+        IDisposable? reader = null, mode = null;
+        try
+        {
+            lock (_engineGate)
+            {
+                (reader, mode) = (_macroReader, _macroMode);
+                (_macroReader, _macroMode) = (null, null);
+                if (reader != null)
+                {
+                    ReleaseNativeAliases(LegacyRemapControls.IsMacroSource);
+                    Engine.Sync();
+                }
+            }
+        }
+        finally
+        {
+            try { reader?.Dispose(); }
+            finally { mode?.Dispose(); }
+        }
+    }
+
     internal void DispatchNativeMacroKey(string path, ushort source, int value)
     {
         lock (_engineGate)
@@ -88,7 +141,13 @@ public sealed class DeviceSession : IDisposable
         }
     }
 
-    internal void AttachNativeNagaReader(IDisposable reader, bool tilt, bool dpi)
+    internal bool OwnsNativeNagaReader(string path, IHidrawButtonReader reader)
+    {
+        lock (_engineGate)
+            return _nagaReaders.TryGetValue(path, out var current) && ReferenceEquals(current.Reader, reader);
+    }
+
+    internal void AttachNativeNagaReader(string path, IHidrawButtonReader reader, bool tilt, bool dpi)
     {
         lock (_engineGate)
         {
@@ -97,27 +156,82 @@ public sealed class DeviceSession : IDisposable
             if (dpi && !HasNativeNagaDpi)
                 ReleaseNativeAliases(LegacyRemapControls.IsNagaDpiSource);
             Engine.Sync();
-            HasNativeNagaTilt |= tilt;
-            HasNativeNagaDpi |= dpi;
-            _nagaReaders.Add(reader);
+            _nagaReaders.Add(path, new(reader, tilt, dpi));
+            UpdateNativeNagaRoutes();
         }
     }
 
-    void ReleaseNativeAliases(Func<ushort, bool> matches)
+    internal bool UpdateNativeNagaReader(string path, bool tilt, bool dpi)
+    {
+        IHidrawButtonReader? retired = null;
+        try
+        {
+            lock (_engineGate)
+            {
+                if (!_nagaReaders.TryGetValue(path, out var current))
+                    return false;
+                if (current.Tilt == tilt && current.Dpi == dpi)
+                    return true;
+                if (tilt || dpi)
+                    _nagaReaders[path] = current with { Tilt = tilt, Dpi = dpi };
+                else
+                {
+                    _nagaReaders.Remove(path);
+                    retired = current.Reader;
+                }
+
+                bool hadTilt = HasNativeNagaTilt, hadDpi = HasNativeNagaDpi;
+                UpdateNativeNagaRoutes();
+                if (tilt && !hadTilt)
+                    ReleaseNativeAliases(LegacyRemapControls.IsNagaTiltSource);
+                else if (current.Tilt && !tilt)
+                    ReleaseNativeAliases(LegacyRemapControls.IsNagaTiltSource, path);
+                if (dpi && !hadDpi)
+                    ReleaseNativeAliases(LegacyRemapControls.IsNagaDpiSource);
+                else if (current.Dpi && !dpi)
+                    ReleaseNativeAliases(LegacyRemapControls.IsNagaDpiSource, path);
+                Engine.Sync();
+                return true;
+            }
+        }
+        finally
+        {
+            retired?.Dispose();
+        }
+    }
+
+    void UpdateNativeNagaRoutes()
+    {
+        bool tilt = _nagaReaders.Values.Any(reader => reader.Tilt);
+        if (tilt != HasNativeNagaTilt)
+            ClearTiltRoutes();
+        HasNativeNagaTilt = Engine.NativeNagaTilt = tilt;
+        HasNativeNagaDpi = _nagaReaders.Values.Any(reader => reader.Dpi);
+    }
+
+    void ReleaseNativeAliases(Func<ushort, bool> matches, string? path = null)
     {
         foreach (ushort source in _keyNodes.Keys.Where(matches).ToArray())
         {
-            _keyNodes.Remove(source);
-            Engine.Key(source, 0);
+            if (path != null)
+                DispatchKey(path, source, 0);
+            else
+            {
+                _keyNodes.Remove(source);
+                Engine.Key(source, 0);
+            }
         }
     }
 
-    internal void DispatchNativeNagaKey(string path, ushort source, int value, bool tilt, bool dpi)
+    internal void DispatchNativeNagaKey(string path, IHidrawButtonReader reader, ushort source, int value)
     {
         lock (_engineGate)
         {
-            if (_stopping || !(tilt && HasNativeNagaTilt && LegacyRemapControls.IsNagaTiltSource(source) ||
-                               dpi && HasNativeNagaDpi && LegacyRemapControls.IsNagaDpiSource(source)))
+            if (_stopping || !_nagaReaders.TryGetValue(path, out var current) || !ReferenceEquals(current.Reader, reader))
+                return;
+            bool routesTilt = current.Tilt && LegacyRemapControls.IsNagaTiltSource(source);
+            bool routesDpi = current.Dpi && LegacyRemapControls.IsNagaDpiSource(source);
+            if (!routesTilt && !routesDpi)
                 return;
             DispatchKey(path, source, value);
             Engine.Sync();
@@ -138,9 +252,10 @@ public sealed class DeviceSession : IDisposable
     /// <summary>Raised on a reader thread when a node goes away (unplugged) or fails.</summary>
     public event Action<string, Exception>? NodeLost;
 
-    internal DeviceSession(RemapEngine engine, ThumbstickMode stick)
+    internal DeviceSession(RemapEngine engine, ThumbstickMode stick, TimeProvider? time = null)
     {
         Engine = engine;
+        _time = time ?? TimeProvider.System;
         _stick = new StickDirections(stick);
     }
 
@@ -205,6 +320,7 @@ public sealed class DeviceSession : IDisposable
     {
         lock (_engineGate)
         {
+            ClearTiltRoutes();
             Exception? failure = null;
             foreach (var (source, _) in _stick.Release())
             {
@@ -325,12 +441,17 @@ public sealed class DeviceSession : IDisposable
         switch (e.Type)
         {
             case EventTypes.Key when (_macroReader == null || !LegacyRemapControls.IsMacroSource(e.Code)) &&
-                (!HasNativeNagaTilt || !LegacyRemapControls.IsNagaTiltSource(e.Code)) &&
+                (!LegacyRemapControls.IsNagaTiltSource(e.Code) || !HasNativeNagaTilt &&
+                    (!Engine.NagaTiltReportsHorizontalWheel || Engine.HasEvdevNagaTilt(e.Code))) &&
                 (!HasNativeNagaDpi || !LegacyRemapControls.IsNagaDpiSource(e.Code)):
+                if (e.Value == 1 && Engine.NagaTiltReportsHorizontalWheel && LegacyRemapControls.IsNagaTiltSource(e.Code) &&
+                    !_keyNodes.ContainsKey(e.Code))
+                    ObserveTiltButton(e.Code);
                 DispatchKey(nodePath, e.Code, e.Value);
                 break;
             case EventTypes.Rel when e.Code is RelativeAxes.Wheel or RelativeAxes.HWheel or RelativeAxes.WheelHiRes or RelativeAxes.HWheelHiRes:
-                Engine.Wheel(e.Code, e.Value);
+                if (!RouteTiltWheel(nodePath, e.Code, e.Value))
+                    Engine.Wheel(e.Code, e.Value);
                 break;
             case EventTypes.Rel:
                 Engine.Relative(e.Code, e.Value);
@@ -338,6 +459,164 @@ public sealed class DeviceSession : IDisposable
             case EventTypes.Syn when e.Code == EventTypes.SynReport:
                 Engine.Sync();
                 break;
+        }
+    }
+
+    TiltRoute Tilt(ushort source) => source == LegacyRemapControls.NagaTiltLeft
+        ? _tiltLeft ??= new(source) : _tiltRight ??= new(source);
+
+    void ClearTiltRoutes()
+    {
+        _tiltLeft = _tiltRight = null;
+        _tiltWheelPath = null;
+        _tiltTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+    }
+
+    bool RouteTiltWheel(string path, ushort axis, int value)
+    {
+        if (HasNativeNagaTilt || !Engine.NagaTiltReportsHorizontalWheel || value == 0 ||
+            axis is not (RelativeAxes.HWheel or RelativeAxes.HWheelHiRes))
+            return false;
+        ushort source = value < 0 ? LegacyRemapControls.NagaTiltLeft : LegacyRemapControls.NagaTiltRight;
+        bool hypershift = Engine.HypershiftActive;
+        var route = value < 0 ? _tiltLeft : _tiltRight;
+        long now = _time.GetTimestamp();
+        DrainTilt(route, now);
+        if (!Engine.CanRemapNagaTilt(source, hypershift) && route?.Held == null && route?.Buttons.Count is not > 0)
+            return false;
+        // The standard event owns the detent when both resolutions are exposed.
+        if ((axis == RelativeAxes.HWheelHiRes) != Engine.NagaHorizontalHighResOnly)
+            return true;
+
+        route ??= Tilt(source);
+        long count = Math.Abs((long)value);
+        if (Engine.NagaHorizontalHighResOnly)
+        {
+            count += route.Remainder;
+            route.Remainder = (int)(count % 120);
+            count /= 120;
+        }
+        if (count == 0)
+            return true;
+        if (!Engine.HasEvdevNagaTilt(source))
+        {
+            EmitTiltDetents(source, count, hypershift);
+            return true;
+        }
+
+        while (count > 0 && route.Buttons.TryDequeue(out var button))
+        {
+            MatchTiltWheel(route, button, 1, hypershift);
+            count--;
+        }
+        if (count > 0)
+        {
+            if (route.Held is { } held)
+                MatchTiltWheel(route, held, count, hypershift);
+            else if (!_keyNodes.ContainsKey(source))
+            {
+                route.Pending.Enqueue(new(now, count, hypershift));
+                _tiltWheelPath = path;
+                ScheduleTiltTimer(now);
+            }
+        }
+        return true;
+    }
+
+    void ObserveTiltButton(ushort source)
+    {
+        var route = Tilt(source);
+        long now = _time.GetTimestamp();
+        DrainTilt(route, now);
+        if (route.Pending.Count == 0 && !Engine.CanRemapNagaTilt(source, Engine.HypershiftActive))
+            return;
+        var button = new TiltButton(now);
+        route.Held = button;
+        if (route.Pending.TryPeek(out var wheel))
+        {
+            MatchTiltWheel(route, button, 1, wheel.Hypershift);
+            if (--wheel.Count == 0)
+                route.Pending.Dequeue();
+        }
+        else
+            route.Buttons.Enqueue(button);
+    }
+
+    void MatchTiltWheel(TiltRoute route, TiltButton button, long count, bool hypershift)
+    {
+        if (button.Released)
+        {
+            if (!button.ConsumesWheel)
+                EmitTiltScroll(route.Source, count, hypershift);
+        }
+        else if (!Engine.HeldNagaTiltConsumesWheel(route.Source))
+        {
+            // A later key can complete the shortcut while this tilt is still held.
+            button.DeferredScroll.Add((count, hypershift));
+        }
+    }
+
+    void DrainTilt(TiltRoute? route, long now)
+    {
+        if (route == null)
+            return;
+        while (route.Buttons.TryPeek(out var button) && _time.GetElapsedTime(button.At, now) >= TiltMirrorWindow)
+            route.Buttons.Dequeue();
+        while (route.Pending.TryPeek(out var wheel) && _time.GetElapsedTime(wheel.At, now) >= TiltMirrorWindow)
+        {
+            route.Pending.Dequeue();
+            EmitTiltDetents(route.Source, wheel.Count, wheel.Hypershift);
+        }
+    }
+
+    void EmitTiltDetents(ushort source, long count, bool hypershift)
+    {
+        for (long i = 0; i < count; i++)
+            Engine.NagaTiltDetent(source, hypershift);
+    }
+
+    void EmitTiltScroll(ushort source, long count, bool hypershift)
+    {
+        for (long i = 0; i < count; i++)
+            Engine.NagaTiltWheelFallback(source, hypershift);
+    }
+
+    void ScheduleTiltTimer(long now)
+    {
+        long? next = _tiltLeft?.Pending.TryPeek(out var left) == true ? left.At : null;
+        if (_tiltRight?.Pending.TryPeek(out var right) == true)
+            next = next is long at ? Math.Min(at, right.At) : right.At;
+        if (next == null)
+            return;
+        _tiltTimer ??= _time.CreateTimer(_ => FinishTiltWindow(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        var remaining = TiltMirrorWindow - _time.GetElapsedTime(next.Value, now);
+        _tiltTimer.Change(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+    }
+
+    void FinishTiltWindow()
+    {
+        string? path = null;
+        try
+        {
+            lock (_engineGate)
+            {
+                if (_stopping || _tiltWheelPath == null)
+                    return;
+                path = _tiltWheelPath;
+                long now = _time.GetTimestamp();
+                DrainTilt(_tiltLeft, now);
+                DrainTilt(_tiltRight, now);
+                Engine.Sync();
+                ScheduleTiltTimer(now);
+            }
+        }
+        // Timer callbacks have no caller to receive an input failure.
+#pragma warning disable CA1031
+        catch (Exception error)
+#pragma warning restore CA1031
+        {
+            if (!_stopping && path != null)
+                NodeLost?.Invoke(path, error);
         }
     }
 
@@ -356,12 +635,33 @@ public sealed class DeviceSession : IDisposable
                 break;
             case 0 when nodes != null && nodes.Remove(nodePath) && nodes.Count == 0:
                 _keyNodes.Remove(code);
-                Engine.Key(code, 0);
+                ReleaseKey(code);
                 break;
             case 2 when nodes?.Contains(nodePath) == true:
                 Engine.Key(code, 2);
                 break;
         }
+    }
+
+    void ReleaseKey(ushort code)
+    {
+        var route = code switch
+        {
+            LegacyRemapControls.NagaTiltLeft => _tiltLeft,
+            LegacyRemapControls.NagaTiltRight => _tiltRight,
+            _ => null,
+        };
+        var button = route?.Held;
+        if (route != null && button != null)
+        {
+            route.Held = null;
+            button.Released = true;
+            button.ConsumesWheel = Engine.HeldNagaTiltConsumesWheel(code);
+        }
+        Engine.Key(code, 0);
+        if (button is { ConsumesWheel: false })
+            foreach (var (count, hypershift) in button.DeferredScroll)
+                EmitTiltScroll(code, count, hypershift);
     }
 
     public void Dispose()
@@ -371,16 +671,19 @@ public sealed class DeviceSession : IDisposable
         try
         {
             lock (_engineGate)
+            {
+                _tiltTimer?.Dispose();
                 Engine.Reset();
+            }
         }
         catch (Exception error) { failure = error; }
         try { _macroReader?.Dispose(); }
         catch (Exception error) { failure ??= error; }
         try { _macroMode?.Dispose(); }
         catch (Exception error) { failure ??= error; }
-        foreach (var reader in _nagaReaders)
+        foreach (var reader in _nagaReaders.Values)
         {
-            try { reader.Dispose(); }
+            try { reader.Reader.Dispose(); }
             catch (Exception error) { failure ??= error; }
         }
         // Readers wake from poll within 100 ms and see the flag; only then are the nodes closed, so no

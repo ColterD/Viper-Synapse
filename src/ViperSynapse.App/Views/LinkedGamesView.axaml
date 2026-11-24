@@ -63,7 +63,8 @@
                             <DataTemplate x:DataType="vm:GameLink">
                                 <StackPanel Spacing="4" Margin="0,4">
                                     <TextBlock Classes="caption" Text="{Binding Device.Header}" />
-                                    <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected}" HorizontalAlignment="Stretch" />
+                                    <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected}" HorizontalAlignment="Stretch"
+                                              IsEnabled="{Binding Device.HasSoftwareSettings}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -44,6 +45,8 @@ public sealed partial class MainViewModel : ObservableObject
     bool _serviceReady;
     bool _backgroundScanRunning, _backgroundScanPending;
     readonly Dictionary<string, (long Revision, Task Completion)> _deviceSaves = [];
+    readonly Dictionary<string, int> _pendingBindingSaves = [];
+    readonly Dictionary<string, ConditionalWeakTable<DeviceSettings, BindingProjection>> _savedBindings = [];
     readonly List<TabViewModel> _back = [], _forward = [];
     bool _navigating;
     long _requestedDeviceSnapshot;
@@ -84,7 +87,10 @@ public sealed partial class MainViewModel : ObservableObject
         ConnectServiceAsync = () => client.ConnectAsync();
         ReadDeviceListAsync = client.GetDevicesAsync;
         ReadDeviceSettingsAsync = client.GetSettingsAsync;
+        CommitDeviceSettingsAsync = client.CommitSettingsAsync;
         ReadLiveDeviceAsync = client.GetUnitStateAsync;
+        SelectManagedDpiStepAsync = client.SelectManagedDpiStepAsync;
+        RetryUnitApplyAsync = client.RetryUnitApplyAsync;
         Settings = new SettingsViewModel(preferences, startAtLogin, built);
         Home = new HomeViewModel(this);
         LinkedGames = new LinkedGamesViewModel(this);
@@ -111,9 +117,14 @@ public sealed partial class MainViewModel : ObservableObject
     public DaemonClient Client => _client;
 
     internal Func<string, DeviceSettings, Task>? WriteDeviceSettingsAsync { get; init; }
+    internal Func<string, DeviceSettings, DeviceSettings?, Task<SettingsCommitResult>> CommitDeviceSettingsAsync { get; init; }
+    internal Func<DeviceInfo, Guid, int, Core.Lighting.DpiStage, Task<DeviceState?>> SelectManagedDpiStepAsync { get; init; }
+    internal Func<string, UnitApplyOutcome, Task<UnitApplyOutcome>> RetryUnitApplyAsync { get; init; }
 
     internal (long Revision, Task Completion) DeviceSaveState(string key) =>
         _deviceSaves.GetValueOrDefault(key, (0, Task.CompletedTask));
+
+    internal bool IsSavingBinding(string key) => _pendingBindingSaves.ContainsKey(key);
 
     internal Task FinishDeviceEditsAsync(TimeSpan timeout)
     {
@@ -127,40 +138,78 @@ public sealed partial class MainViewModel : ObservableObject
         await Task.WhenAll(FinishDeviceEditsAsync(timeout), Macros.PendingSave, Home.Shortcuts.PendingSave,
             Settings.PendingSave).WaitAsync(timeout);
         return !Macros.HasFailedSave && !Home.Shortcuts.HasFailedSave && !Settings.HasFailedSave &&
-            !_deviceSaveFeedback.Values.Any(feedback => feedback.Error != null);
+            _ordinarySaveFailures.Count == 0 && _bindingSaveFailures.Count == 0;
     }
 
     // The service stores profiles by model, even if a particular unit is unplugged or a tab is recreated.
-    internal Task<Exception?> SaveDeviceSettings(string key, DeviceSettings settings, DeviceSettings? baseline = null)
+    internal Task<Exception?> SaveDeviceSettings(string key, DeviceSettings settings, DeviceSettings? baseline = null,
+        Func<DeviceSettings, bool, DeviceSettings>? applyBinding = null, Action<Exception?>? onComplete = null,
+        long retryBindingRevision = 0, BindingSaveTarget? bindingTarget = null)
     {
         var previous = DeviceSaveState(key);
         long revision = previous.Revision + 1;
-        SetSaveFeedback(key, new(revision, true, settings, baseline));
-        var pending = SaveAfterAsync(previous.Completion, key, revision, settings, baseline);
+        var feedback = GetSaveFeedback(key);
+        var request = new DeviceSaveFeedback(revision, true, settings, baseline, Error: feedback?.Error,
+            DeviceName: Devices.FirstOrDefault(device => device.Key == key)?.ShortName ?? feedback?.DeviceName,
+            ApplyBinding: applyBinding, BindingTarget: bindingTarget);
+        if (applyBinding != null)
+            _pendingBindingSaves[key] = _pendingBindingSaves.GetValueOrDefault(key) + 1;
+        SetSaveFeedback(key, request);
+        if (!_savedBindings.TryGetValue(key, out var bindings))
+            _savedBindings.Add(key, bindings = new());
+        var pending = SaveAfterAsync(previous.Completion, key, request, bindings, onComplete, retryBindingRevision);
         _deviceSaves[key] = (revision, pending);
         return pending;
     }
 
-    async Task<Exception?> SaveAfterAsync(Task previous, string key, long revision, DeviceSettings settings, DeviceSettings? baseline)
+    async Task<Exception?> SaveAfterAsync(Task previous, string key, DeviceSaveFeedback request,
+        ConditionalWeakTable<DeviceSettings, BindingProjection> bindings, Action<Exception?>? onComplete, long retryBindingRevision)
     {
         await previous.ConfigureAwait(false);
+        Exception? error = null;
+        IReadOnlyList<UnitApplyOutcome>? units = null;
+        var original = request.Baseline;
+        var edited = request.Draft!;
         try
         {
-            IReadOnlyList<UnitApplyOutcome>? units = null;
+            var applyBinding = request.ApplyBinding;
+            while (original != null && bindings.TryGetValue(original, out var step))
+            {
+                original = step.To;
+                if (applyBinding != null)
+                    continue;
+                var projected = step.Apply(edited);
+                if (!ReferenceEquals(edited, projected))
+                    // The daemon tags the projected attempt even if the ordinary write fails.
+                    bindings.TryAdd(edited, new(projected, step.Apply));
+                edited = projected;
+            }
+            if (applyBinding != null && original != null)
+                edited = applyBinding(original, true);
             if (WriteDeviceSettingsAsync is { } write)
-                await write(key, settings).ConfigureAwait(false);
+                await write(key, edited).ConfigureAwait(false);
             else
-                units = (await Client.CommitSettingsAsync(key, settings, baseline).ConfigureAwait(false)).Units;
-            await Dispatcher.UIThread.InvokeAsync(() => CompleteSave(key, revision, units, null));
-            return null;
+                units = (await CommitDeviceSettingsAsync(key, edited, original).ConfigureAwait(false)).Units;
+            // Only accepted bindings extend the chain of binding changes.
+            if (original != null && applyBinding != null && !ReferenceEquals(original, edited))
+                bindings.Add(original, new(edited, snapshot => applyBinding(snapshot, false)));
         }
         catch (Exception e)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => CompleteSave(key, revision, null, e));
-            Fail("Could not save the device settings", e, () => GetSaveFeedback(key)?.Revision == revision);
-            return e;
+            System.Diagnostics.Trace.TraceWarning("Could not save device settings for {0}: {1}", key, e);
+            error = e;
         }
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (request.ApplyBinding != null && --_pendingBindingSaves[key] == 0)
+                _pendingBindingSaves.Remove(key);
+            CompleteSave(key, request, units, error, retryBindingRevision, original, edited);
+            onComplete?.Invoke(error);
+        });
+        return error;
     }
+
+    sealed record BindingProjection(DeviceSettings To, Func<DeviceSettings, DeviceSettings> Apply);
 
     public MacroLibrary MacroLibrary => Macros.Library;
 
@@ -174,6 +223,7 @@ public sealed partial class MainViewModel : ObservableObject
             _forward.Clear();
         }
         (newValue as DeviceViewModel)?.Shown();
+        RefreshDeviceSaveNotices();
         if (newValue == LinkedGames)
             LinkedGames.Refresh();
         if (newValue == Macros)
@@ -372,7 +422,13 @@ public sealed partial class MainViewModel : ObservableObject
             }
             Home.SetDiscoveryState(DeviceDiscoveryState.Ready);
             if (deviceListChanged)
+            {
                 Home.Shortcuts.DevicesUpdated();
+                Macros.KeymapsChanged();
+                if (SelectedTab == LinkedGames)
+                    LinkedGames.Refresh();
+                RefreshDeviceSaveNotices();
+            }
             OpenRequested();
             return reloadExisting ? Devices.ToArray() : [];
         });

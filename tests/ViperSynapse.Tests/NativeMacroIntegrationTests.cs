@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Time.Testing;
 using ViperSynapse.App.Services;
 using ViperSynapse.App.ViewModels;
 using ViperSynapse.Core.Bindings;
@@ -27,31 +28,156 @@ public class NativeMacroIntegrationTests
     [InlineData(0x00)]
     [InlineData(0x03)]
     public Task Native_macros_are_editable_and_leave_ordinary_holds_alone(byte initialMode) =>
-        HeadlessApp.Session.Dispatch(() =>
+        HeadlessApp.Session.Dispatch<bool>(async () =>
         {
             var root = Directory.CreateTempSubdirectory("viper-native-macros-");
             try
             {
-                VerifyNativeMacros(root.FullName, initialMode);
+                await VerifyNativeMacrosAsync(root.FullName, initialMode);
             }
             finally
             {
                 root.Delete(recursive: true);
             }
+            return true;
         }, CancellationToken.None);
 
-    static void VerifyNativeMacros(string root, byte initialMode)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Evdev_macro_fallback_only_acts_on_the_ordinary_release_it_receives(bool earlyRelease)
+    {
+        var root = Directory.CreateTempSubdirectory("viper-macro-evdev-");
+        try
+        {
+            var output = new Output();
+            var store = new SettingsStore(root.FullName);
+            DeviceSession? session = null;
+            using var manager = new DeviceManager(store, output)
+            {
+                StartInputSession = (_, engine, mode, _) => session = new DeviceSession(engine, mode),
+            };
+            var macro = Macro.Create("M1", [new KeyStep(F1, true), new KeyStep(F1, false)]);
+            manager.SetMacros(new MacroLibrary([macro]));
+            ushort m1 = LegacyRemapControls.FirstMacroSource;
+            var settings = store.LoadDevice(ProductKey);
+            var keymap = settings.ActiveKeymapOrFirst.With(m1, new MacroBinding(macro.Id));
+            store.SaveDevice(ProductKey, settings with { Profiles = [settings.Active with { Keymaps = [keymap] }] });
+            manager.Refresh([], [new InputNode(InputPath, 0x1532, LegacyRemapControls.BlackWidowChromaV2, "BlackWidow", "usb-emulated/input0")],
+                _ => false, _ => throw new InvalidOperationException(), _ => new DiscoveredControls([Q, m1], "available"));
+            var input = Assert.IsType<DeviceSession>(session);
+            Assert.False(input.HasNativeMacroKeys);
+            SendKey(input, Q, 1);
+            SendKey(input, m1, 1);
+            SendKey(input, m1, 0);
+            await output.WaitForReleaseAsync(F1);
+            if (earlyRelease)
+                SendKey(input, Q, 0);
+            SendKey(input, Q, 2);
+            Assert.Equal(!earlyRelease, output.Keys.Contains((Q, 2)));
+            SendKey(input, Q, 0);
+            Assert.Single(output.Keys, entry => entry == (Q, 0));
+            var info = Assert.Single(JsonSerializer.Deserialize(manager.DevicesJson(), ClientJson.Default.ListDeviceInfo)!);
+            var health = DeviceHealth.From(info, DeviceCatalogue.Default.Find(LegacyRemapControls.BlackWidowChromaV2), genericControls: true);
+            Assert.Equal("Driver-dependent", Assert.Single(health.Features, feature => feature.Name == "M1–M5").Status);
+        }
+        finally { root.Delete(recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Native_start_failure_keeps_ordinary_input_and_refresh_retries(bool hasFallback, bool rejectModeRestore)
+    {
+        var root = Directory.CreateTempSubdirectory("viper-macro-start-");
+        try
+        {
+            var output = new Output();
+            var store = new SettingsStore(root.FullName);
+            var firmware = new ModeFirmware(0) { RejectRegularMode = rejectModeRestore };
+            bool rejectStartup = true;
+            DeviceSession? session = null;
+            MacroReader? reader = null;
+            using var manager = new DeviceManager(store, output)
+            {
+                IsNativeMacroNode = node => node.DevicePath == MacroPath,
+                StartInputSession = (_, engine, mode, _) => session = new DeviceSession(engine, mode),
+                OpenNativeMacroKeys = (_, input, _) => reader = new MacroReader(input, () =>
+                {
+                    Assert.Equal<byte>(3, firmware.Mode);
+                    if (rejectStartup)
+                        throw new IOException("emulated macro reader start failure");
+                }),
+            };
+            var macro = Macro.Create("M1", [new KeyStep(F1, true), new KeyStep(F1, false)]);
+            manager.SetMacros(new MacroLibrary([macro]));
+            ushort m1 = LegacyRemapControls.FirstMacroSource;
+            var settings = store.LoadDevice(ProductKey);
+            var keymap = settings.ActiveKeymapOrFirst.With(m1, new MacroBinding(macro.Id));
+            store.SaveDevice(ProductKey, settings with { Profiles = [settings.Active with { Keymaps = [keymap] }] });
+            const ushort pid = LegacyRemapControls.BlackWidowChromaV2;
+            void Refresh(bool force = false) =>
+                manager.Refresh([new(ControlPath, 0x1532, pid, 2, "BlackWidow", "usb-test/input2"),
+                    new(MacroPath, 0x1532, pid, 1, "BlackWidow", "usb-test/input1")],
+                    [new(InputPath, 0x1532, pid, "BlackWidow", "usb-test/input0")], node => node.DevicePath == ControlPath,
+                    _ => new RazerTransport(firmware) { AnswerDelay = TimeSpan.Zero },
+                    _ => new DiscoveredControls(hasFallback ? [Q, m1] : [Q], "available"), force);
+            Refresh();
+
+            var input = Assert.IsType<DeviceSession>(session);
+            Assert.True(reader?.Disposed);
+            Assert.Equal(new byte[] { 3, 0 }, firmware.ModeWrites);
+            Assert.Equal<byte>(rejectModeRestore ? (byte)3 : (byte)0, firmware.Mode);
+            var info = Assert.Single(manager.Devices);
+            Assert.True(info.Remapping);
+            Assert.False(info.NativeMacroKeys);
+            const string startupError = "Could not start native macro keys: emulated macro reader start failure";
+            Assert.Equal(rejectModeRestore
+                ? startupError + " Could not clean up native macro mode: The BlackWidow did not confirm its requested device mode."
+                : startupError, info.InputIssue);
+            Assert.Equal(hasFallback, info.InputControls!.Contains(m1));
+            SendKey(input, Q, 1);
+            if (hasFallback)
+            {
+                SendKey(input, m1, 1);
+                SendKey(input, m1, 0);
+                await output.WaitForReleaseAsync(F1);
+            }
+            SendKey(input, Q, 0);
+            Assert.Equal(hasFallback ? [(Q, 1), (F1, 1), (F1, 0), (Q, 0)] : new[] { (Q, 1), (Q, 0) }, output.Keys);
+
+            rejectStartup = false;
+            firmware.RejectRegularMode = false;
+            Refresh();
+            Assert.False(Assert.Single(manager.Devices).NativeMacroKeys);
+            Refresh(force: true);
+            Assert.True(Assert.Single(manager.Devices).NativeMacroKeys);
+            Assert.Null(Assert.Single(manager.Devices).InputIssue);
+            Assert.False(Assert.IsType<MacroReader>(reader).Disposed);
+            manager.Dispose();
+            Assert.Equal<byte>(0, firmware.Mode);
+        }
+        finally { root.Delete(recursive: true); }
+    }
+
+    static async Task VerifyNativeMacrosAsync(string root, byte initialMode)
     {
         var store = new SettingsStore(root);
         var firmware = new ModeFirmware(initialMode);
+        var clock = new PlaybackClock();
         var output = new Output();
         DeviceSession? session = null;
         MacroReader? reader = null;
         ushort[] sources = Enumerable.Range(LegacyRemapControls.FirstMacroSource, 5)
             .Select(source => (ushort)source).ToArray();
+        var descriptor = Directory.CreateDirectory(Path.Combine(root, Path.GetFileName(MacroPath), "device"));
+        File.WriteAllBytes(Path.Combine(descriptor.FullName, "report_descriptor"), Convert.FromHexString("85047508950F8100"));
+        Directory.CreateSymbolicLink(Path.Combine(descriptor.FullName, "driver"), "../../drivers/hid-generic");
         using var manager = new DeviceManager(store, output)
         {
-            IsNativeMacroNode = node => node.DevicePath == MacroPath,
+            InputTimeProvider = clock,
+            IsNativeMacroNode = node => BlackWidowMacroKeys.IsNativeReportNode(node, root),
             OpenNativeMacroKeys = (path, onKey, _) =>
             {
                 Assert.Equal(MacroPath, path);
@@ -95,8 +221,12 @@ public class NativeMacroIntegrationTests
 
         var settings = store.LoadDevice(ProductKey);
         var keymap = settings.ActiveKeymapOrFirst;
+        var macros = sources.Select((_, i) => Macro.Create($"M{i + 1}", i == 0
+            ? [new KeyStep(Q, true), new DelayStep(100), new KeyStep(Q, false), new KeyStep(F1, true), new KeyStep(F1, false)]
+            : [new KeyStep((ushort)(F1 + i), true), new KeyStep((ushort)(F1 + i), false)])).ToArray();
+        manager.SetMacros(new MacroLibrary(macros));
         for (int i = 0; i < sources.Length; i++)
-            keymap = keymap.With(sources[i], new KeyboardBinding((ushort)(F1 + i)));
+            keymap = keymap.With(sources[i], new MacroBinding(macros[i].Id));
         store.SaveDevice(ProductKey, settings with { Profiles = [settings.Active with { Keymaps = [keymap] }] });
         manager.Apply(ProductKey);
 
@@ -107,9 +237,21 @@ public class NativeMacroIntegrationTests
         Assert.Equal<byte>(0x03, firmware.Mode);
         Assert.Equal(initialMode == 0x00 ? new byte[] { 0x03 } : [], firmware.ModeWrites);
 
-        Assert.Equal(new[] { (Ctrl, 1), (Q, 1), (F1, 1) }, output.Keys);
-        var expected = new List<(ushort Code, int Value)> { (Ctrl, 1), (Q, 1) };
-        for (int i = 0; i < sources.Length; i++)
+        await clock.DelayRegistered.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        activeReader.Read(0x14, 0x20, 0xe0);
+        activeReader.Read(0x20);
+        SendKey(activeSession, sources[0], 1);
+        activeReader.Read();
+        SendKey(activeSession, sources[0], 0);
+        SendKey(activeSession, Q, 2);
+        // The recorder sees the macro's attempted down on an already held key. Neither
+        // producer releases Q until the physical key goes up, and the repeat still passes.
+        Assert.Equal(new[] { (Ctrl, 1), (Q, 1), (Q, 1), (Q, 2) }, output.Keys);
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        await output.WaitForReleaseAsync(F1);
+        Assert.Equal(new[] { (Ctrl, 1), (Q, 1), (Q, 1), (Q, 2), (F1, 1), (F1, 0) }, output.Keys);
+        var expected = new List<(ushort Code, int Value)> { (Ctrl, 1), (Q, 1), (Q, 1), (Q, 2), (F1, 1), (F1, 0) };
+        for (int i = 1; i < sources.Length; i++)
         {
             byte usage = (byte)(0x20 + i);
             activeReader.Read(0x14, usage, 0xe0);
@@ -117,8 +259,11 @@ public class NativeMacroIntegrationTests
             SendKey(activeSession, sources[i], 1);
             activeReader.Read();
             SendKey(activeSession, sources[i], 0);
+            await output.WaitForReleaseAsync((ushort)(F1 + i));
             expected.Add(((ushort)(F1 + i), 1));
             expected.Add(((ushort)(F1 + i), 0));
+            SendKey(activeSession, Q, 2);
+            expected.Add((Q, 2));
         }
         Assert.Equal(expected, output.Keys);
         SendKey(activeSession, Q, 0);
@@ -134,6 +279,18 @@ public class NativeMacroIntegrationTests
         Assert.Equal(initialMode, firmware.Mode);
         Assert.Equal(initialMode == 0x00 ? new byte[] { 0x03, 0x00 } : [], firmware.ModeWrites);
         Assert.Equal(expected, output.Keys);
+    }
+
+    sealed class PlaybackClock : FakeTimeProvider
+    {
+        public TaskCompletionSource DelayRegistered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            DelayRegistered.TrySetResult();
+            return timer;
+        }
     }
 
     static void SendKey(DeviceSession session, ushort source, int value)
@@ -169,6 +326,7 @@ public class NativeMacroIntegrationTests
         RazerReport? _request;
         public string Path => ControlPath;
         public byte Mode { get; private set; } = initialMode;
+        public bool RejectRegularMode { get; set; }
         public List<byte> ModeWrites { get; } = [];
 
         public void SendFeature(ReadOnlySpan<byte> report) => _request = RazerReport.Parse(report[1..]);
@@ -202,8 +360,10 @@ public class NativeMacroIntegrationTests
             Assert.Equal<byte>(0xff, request.TransactionId);
             Assert.Equal<byte>(2, request.DataSize);
             Assert.Equal<byte>(0, request.Arguments[1]);
-            Mode = request.Arguments[0];
-            ModeWrites.Add(Mode);
+            byte mode = request.Arguments[0];
+            ModeWrites.Add(mode);
+            if (!RejectRegularMode || mode != 0)
+                Mode = mode;
             return [Mode, 0];
         }
 
@@ -212,8 +372,17 @@ public class NativeMacroIntegrationTests
 
     sealed class Output : IInputSink
     {
-        public List<(ushort Code, int Value)> Keys { get; } = [];
-        public void Key(ushort code, int value) => Keys.Add((code, value));
+        readonly List<(ushort Code, int Value)> _keys = [];
+        readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, TaskCompletionSource> _releases = new();
+        public (ushort Code, int Value)[] Keys { get { lock (_keys) return _keys.ToArray(); } }
+        public void Key(ushort code, int value)
+        {
+            lock (_keys) _keys.Add((code, value));
+            if (value == 0)
+                Released(code).TrySetResult();
+        }
+        TaskCompletionSource Released(ushort code) => _releases.GetOrAdd(code, _ => new(TaskCreationOptions.RunContinuationsAsynchronously));
+        public Task WaitForReleaseAsync(ushort code) => Released(code).Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         public void Relative(ushort axis, int value) { }
         public void Sync() { }
     }

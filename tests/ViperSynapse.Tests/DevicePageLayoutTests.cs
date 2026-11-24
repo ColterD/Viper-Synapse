@@ -10,6 +10,7 @@ using ViperSynapse.App.Controls;
 using ViperSynapse.App.Services;
 using ViperSynapse.App.ViewModels;
 using ViperSynapse.App.Views;
+using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Devices;
 
 namespace ViperSynapse.Tests;
@@ -148,13 +149,16 @@ public sealed class DevicePageLayoutTests
 
     [Fact]
     public Task Extracted_lighting_canvas_uses_the_selected_device_and_renders_frame_changes() =>
-        HeadlessApp.Session.Dispatch(() =>
+        HeadlessApp.Session.Dispatch<bool>(async () =>
         {
-            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false)
+            {
+                WriteDeviceSettingsAsync = (_, _) => Task.CompletedTask,
+            };
             var info = new DeviceInfo("02eb", "02eb", "Razer Tartarus V2 Pro", "keypad", "usb-emulated",
                 true, true, "FIXTURE", "v1.00", "/dev/emulated", [], false, null);
             var device = new DeviceViewModel(info, main) { SelectedPage = "LIGHTING" };
-            device.Lighting.Load(null);
+            await device.ReloadSettingsAsync(_ => Task.FromResult(DeviceSettings.Create()));
             device.Lighting.EffectTab = LightingViewModel.EffectTabs[1];
             Assert.True(device.Lighting.ShowKeyCanvas);
             var view = new DeviceView { DataContext = device };
@@ -164,6 +168,7 @@ public sealed class DevicePageLayoutTests
             {
                 var lighting = Assert.IsType<DeviceLightingView>(view.FindControl<DeviceLightingView>("LightingPage"));
                 Dispatcher.UIThread.RunJobs();
+                Assert.True(lighting.IsEffectivelyEnabled);
                 var canvas = Assert.IsType<DeviceDrawing>(lighting.FindControl<DeviceDrawing>("PaintCanvas"));
                 Assert.True(canvas.IsEffectivelyVisible);
                 Assert.Same(device, canvas.Device);
@@ -194,6 +199,7 @@ public sealed class DevicePageLayoutTests
                 device.Detach();
                 window.Close();
             }
+            return true;
         }, CancellationToken.None);
 
 }

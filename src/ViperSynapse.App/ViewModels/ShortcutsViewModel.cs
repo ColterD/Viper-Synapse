@@ -34,6 +34,8 @@ public sealed partial class ShortcutsViewModel(MainViewModel main) : ObservableO
 
     public ObservableCollection<ShortcutRow> Rows { get; } = [];
 
+    internal Guid? EditingShortcutId => _editing;
+
     public bool IsEmpty => Rows.Count == 0;
 
     public string? SaveStatus => Persistence.Reloading ? "Reloading saved shortcuts…" :

@@ -18,6 +18,7 @@ public sealed class RemapEngine
     readonly TimeProvider _time;
     readonly MacroRunner _macros;
     readonly Dictionary<ushort, Binding> _held = [];
+    readonly HashSet<ushort> _heldNagaTiltActions = [];
     readonly Dictionary<ushort, SharedModifierSink.Owner> _owners = [];
     readonly Dictionary<ushort, HashSet<Playback>> _running = [];
     readonly Dictionary<Guid, Playback> _toggled = [];
@@ -25,6 +26,7 @@ public sealed class RemapEngine
     // Where each sequence macro is up to, per key.
     readonly Dictionary<(ushort, Guid), int> _sequence = [];
     int _hypershiftHeld;
+    int _horizontalLeftRemainder, _horizontalRightRemainder;
 
     public RemapEngine(IInputSink sink, IEngineHost host, TimeProvider? time = null)
     {
@@ -39,6 +41,45 @@ public sealed class RemapEngine
     /// <summary>What a control that sends no key of its own (a thumbstick direction) does when unbound: the device's
     /// default for it, W for the stick's up, say. Null leaves it doing nothing.</summary>
     public Func<ushort, Binding?>? Defaults { get; set; }
+
+    public Action<ushort>? NagaDpiStep { get; set; }
+    public bool NativeNagaTilt { get; set; }
+    public bool NagaTiltReportsHorizontalWheel { get; set; }
+    public bool NagaHorizontalHighResOnly { get; set; }
+    public bool EvdevNagaTiltLeft { get; set; }
+    public bool EvdevNagaTiltRight { get; set; }
+    public IReadOnlySet<ushort>? NagaTiltShortcutSources { get; set; }
+
+    public bool HasEvdevNagaTilt(ushort source) => source == LegacyRemapControls.NagaTiltLeft ? EvdevNagaTiltLeft : EvdevNagaTiltRight;
+
+    public bool CanRemapNagaTilt(ushort source, bool hypershift) => Keymap.Resolve(source, hypershift) is not DefaultBinding ||
+        NagaTiltShortcutSources?.Contains(source) == true;
+
+    public bool HeldNagaTiltConsumesWheel(ushort source) => _heldNagaTiltActions.Contains(source);
+
+    public void NagaTiltDetent(ushort source, bool hypershift)
+    {
+        if (_held.ContainsKey(source))
+            return;
+        if (Keymap.Resolve(source, hypershift) is DefaultBinding && _host.Shortcuts.Completed(source, _held.ContainsKey) == null)
+        {
+            NagaTiltWheelFallback(source, hypershift);
+            return;
+        }
+        Key(source, 1, hypershift);
+        Key(source, 0);
+    }
+
+    public void NagaTiltWheelFallback(ushort tilt, bool hypershift)
+    {
+        bool left = tilt == LegacyRemapControls.NagaTiltLeft;
+        ushort source = left ? SourceKeys.WheelLeft : SourceKeys.WheelRight;
+        var binding = Keymap.Resolve(source, hypershift);
+        if (binding is DefaultBinding)
+            Scroll(RelativeAxes.HWheel, (left ? -1 : 1) * Math.Max(1, ScrollLines));
+        else
+            RunWheelBinding(source, binding, 1);
+    }
 
     /// <summary>Any key press stops running macros (Synapse's "Macro and Keystroke Interruption: any key").</summary>
     public MacroInterruption Interruption { get; set; } = MacroInterruption.DedicatedKey;
@@ -64,7 +105,9 @@ public sealed class RemapEngine
     public bool HypershiftActive => _hypershiftHeld > 0 || PhysicalHypershiftHeld?.Invoke() == true;
 
     /// <summary>A key or button from the device: 1 down, 0 up, 2 auto-repeat.</summary>
-    public void Key(ushort code, int value)
+    public void Key(ushort code, int value) => Key(code, value, null);
+
+    void Key(ushort code, int value, bool? hypershift)
     {
         if (value == 2)
         {
@@ -81,12 +124,21 @@ public sealed class RemapEngine
                 StopMacros();
             // A global shortcut this press completes beats the keymap; the keys held before it keep doing what
             // they started.
-            var binding = _host.Shortcuts.Completed(code, _held.ContainsKey)?.Binding ?? Keymap.Resolve(code, HypershiftActive);
+            var shortcut = _host.Shortcuts.Completed(code, _held.ContainsKey);
+            var binding = shortcut?.Binding ?? Keymap.Resolve(code, hypershift ?? HypershiftActive);
+            bool tiltAction = LegacyRemapControls.IsNagaTiltSource(code) && binding is not DefaultBinding;
             if (binding is DefaultBinding && SourceKeys.IsStick(code))
                 binding = Defaults?.Invoke(code) ?? new DisableBinding();
+            if (binding is DefaultBinding && LegacyRemapControls.IsNagaTiltSource(code) &&
+                (NativeNagaTilt || NagaTiltReportsHorizontalWheel && HasEvdevNagaTilt(code)))
+                binding = NagaTiltReportsHorizontalWheel ? new DisableBinding() : new MouseBinding(
+                    code == LegacyRemapControls.NagaTiltLeft ? MouseFunction.ScrollLeft : MouseFunction.ScrollRight);
             // The Naga's vendor DPI buttons have no default virtual input event.
             if (binding is DefaultBinding && LegacyRemapControls.IsNagaDpiSource(code))
+            {
+                NagaDpiStep?.Invoke(code);
                 binding = new DisableBinding();
+            }
             var owner = _sink.CreateOwner();
             _held[code] = binding;
             _owners[code] = owner;
@@ -98,9 +150,16 @@ public sealed class RemapEngine
                 DisposeAfterFailure(owner, error);
                 throw;
             }
+            if (tiltAction && _held.ContainsKey(code))
+                _heldNagaTiltActions.Add(code);
+            if (shortcut != null)
+                foreach (ushort key in shortcut.Keys)
+                    if (LegacyRemapControls.IsNagaTiltSource(key) && _held.ContainsKey(key))
+                        _heldNagaTiltActions.Add(key);
         }
         else if (_held.Remove(code, out var binding))
         {
+            _heldNagaTiltActions.Remove(code);
             var owner = _owners[code];
             _owners.Remove(code);
             try { Release(code, binding, owner); }
@@ -122,21 +181,59 @@ public sealed class RemapEngine
     /// <summary>Wheel movement: each direction is a control of its own and can be rebound.</summary>
     public void Wheel(ushort axis, int value)
     {
+        if (value == 0)
+            return;
         bool horizontal = axis is RelativeAxes.HWheel or RelativeAxes.HWheelHiRes;
         bool hiRes = axis is RelativeAxes.WheelHiRes or RelativeAxes.HWheelHiRes;
         ushort source = horizontal
             ? value > 0 ? SourceKeys.WheelRight : SourceKeys.WheelLeft
             : value > 0 ? SourceKeys.WheelUp : SourceKeys.WheelDown;
         var binding = Keymap.Resolve(source, HypershiftActive);
+        if (horizontal && (NativeNagaTilt || NagaTiltReportsHorizontalWheel))
+        {
+            ushort tilt = value > 0 ? LegacyRemapControls.NagaTiltRight : LegacyRemapControls.NagaTiltLeft;
+            if (NativeNagaTilt || HasEvdevNagaTilt(tilt))
+            {
+                if (!NagaTiltReportsHorizontalWheel || Keymap.Resolve(tilt, HypershiftActive) is not DefaultBinding ||
+                    NagaTiltShortcutSources?.Contains(tilt) == true)
+                    return;
+            }
+            else if (Keymap.Resolve(tilt, HypershiftActive) is not DefaultBinding || _host.Shortcuts.Completed(tilt, _held.ContainsKey) != null)
+            {
+                if (!hiRes)
+                    for (long i = 0; i < Math.Abs((long)value); i++)
+                    {
+                        Key(tilt, 1);
+                        Key(tilt, 0);
+                    }
+                return;
+            }
+        }
+        bool highResOnly = horizontal && NagaHorizontalHighResOnly;
+        ref int remainder = ref (value > 0 ? ref _horizontalRightRemainder : ref _horizontalLeftRemainder);
         if (binding is DefaultBinding)
         {
+            if (highResOnly)
+                remainder = 0;
             _sink.Relative(axis, value * Math.Max(1, ScrollLines));
             return;
         }
-        // A bound wheel fires once per detent; the high-resolution twin of the same detent is dropped.
-        if (hiRes)
+        // When both resolutions are available, only the standard report owns the bound detent.
+        if (hiRes != highResOnly)
             return;
-        for (int i = 0; i < Math.Abs(value); i++)
+        long count = Math.Abs((long)value);
+        if (highResOnly)
+        {
+            count += remainder;
+            remainder = (int)(count % 120);
+            count /= 120;
+        }
+        RunWheelBinding(source, binding, count);
+    }
+
+    void RunWheelBinding(ushort source, Binding binding, long count)
+    {
+        for (long i = 0; i < count; i++)
         {
             var owner = _sink.CreateOwner();
             try
@@ -172,7 +269,9 @@ public sealed class RemapEngine
             catch (Exception error) { failure ??= error; }
         }
         _held.Clear();
+        _heldNagaTiltActions.Clear();
         _owners.Clear();
+        _horizontalLeftRemainder = _horizontalRightRemainder = 0;
         List<Playback> cancelled;
         lock (_running)
         {

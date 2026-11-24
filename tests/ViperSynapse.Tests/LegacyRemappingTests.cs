@@ -129,12 +129,15 @@ public class LegacyRemappingTests
     [InlineData("0053", "mouse", 2, 12, "thumb grid", "Thumb ")]
     public Task Customize_labels_and_edits_only_advertised_legacy_buttons(
         string productId, string type, int first, int count, string group, string prefix) =>
-        HeadlessApp.Session.Dispatch(() =>
+        HeadlessApp.Session.Dispatch<bool>(async () =>
         {
             ushort[] sources = Enumerable.Range(first, count).Select(code => (ushort)code).ToArray();
             var info = new DeviceInfo(productId, productId, "Legacy Razer device", type, "usb-legacy",
                 true, true, null, null, null, [], false, null, [Q, ..sources], "available", "wired");
-            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+            var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false)
+            {
+                WriteDeviceSettingsAsync = (_, _) => Task.CompletedTask,
+            };
             var device = new DeviceViewModel(info, main);
 
             var rows = device.Rows.Where(row => row.Key.Group == group).ToArray();
@@ -148,13 +151,14 @@ public class LegacyRemappingTests
             Assert.Equal(sources[^1], editor.Row.Key.Source);
             editor.SelectedFunction = BindingEditorViewModel.Functions.Single(function => function.Kind == FunctionKind.Keyboard);
             editor.CapturedKey = F1;
-            editor.SaveCommand.Execute(null);
+            await SaveBindingAsync(device, editor);
             Assert.Equal(new KeyboardBinding(F1), device.CurrentSettings.ActiveKeymapOrFirst.Standard[sources[^1]]);
 
             device.Info = info with { InputControls = [Q, sources[0]] };
             Assert.Equal(sources[0], Assert.Single(device.Rows, row => row.Key.Group == group).Key.Source);
             device.Info = info with { InputControlsStatus = "partial" };
             Assert.All(device.Rows, row => Assert.False(row.Bindable));
+            return true;
         }, CancellationToken.None);
 
     [Theory]
@@ -163,18 +167,21 @@ public class LegacyRemappingTests
     [InlineData(0x118, "DPI Up", "DPI Buttons")]
     [InlineData(0x119, "DPI Down", "DPI Buttons")]
     public Task Customize_saves_an_available_Naga_wheel_or_DPI_button(
-        ushort source, string label, string filter) => HeadlessApp.Session.Dispatch(() =>
+        ushort source, string label, string filter) => HeadlessApp.Session.Dispatch<bool>(async () =>
     {
         var info = new DeviceInfo("0053", "0053", "Naga Chroma", "mouse", "usb-legacy",
             true, true, null, null, null, [], false, null, [2, source], "available", "wired");
-        var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false);
+        var main = new MainViewModel(new DaemonClient(), new AppPreferences(), false)
+        {
+            WriteDeviceSettingsAsync = (_, _) => Task.CompletedTask,
+        };
         var device = new DeviceViewModel(info, main);
 
         Assert.Equal(new[] { "All Buttons", "Thumb Grid", filter }, device.KeyFilters);
         device.SelectedKeyFilter = filter;
         var row = Assert.Single(device.KeyLines, line => line.Left != null).Left!;
         Assert.Equal(source, row.Key.Source);
-        Assert.Equal(label, row.ListCategory);
+        Assert.Equal(label, row.ControlName);
         Assert.True(row.Bindable);
 
         device.SelectKeyCommand.Execute(row);
@@ -182,17 +189,30 @@ public class LegacyRemappingTests
         Assert.Equal(filter == "DPI Buttons", editor.ShowNagaDpiNotice);
         editor.SelectedFunction = BindingEditorViewModel.Functions.Single(function => function.Kind == FunctionKind.Keyboard);
         editor.CapturedKey = F1;
-        editor.SaveCommand.Execute(null);
+        await SaveBindingAsync(device, editor);
         Assert.Equal(new KeyboardBinding(F1), device.CurrentSettings.ActiveKeymapOrFirst.Standard[source]);
-        Assert.Equal(label, row.ListCategory);
+        Assert.Equal(label, row.ControlName);
         Assert.True(row.Changed);
 
         device.Info = info with { InputControlsStatus = "partial" };
         Assert.All(device.Rows, available => Assert.False(available.Bindable));
         device.Info = info with { InputControls = [2] };
         Assert.DoesNotContain(filter, device.KeyFilters);
-        Assert.Equal("Thumb 1", Assert.Single(device.Rows).ListCategory);
+        Assert.Equal("Thumb 1", Assert.Single(device.Rows).ControlName);
+        return true;
     }, CancellationToken.None);
+
+    static async Task SaveBindingAsync(DeviceViewModel device, BindingEditorViewModel editor)
+    {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        device.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(DeviceViewModel.Editor) && device.Editor == null)
+                closed.TrySetResult();
+        };
+        editor.SaveCommand.Execute(null);
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    }
 
     static void SendKey(DeviceSession session, string node, ushort code, int value)
     {

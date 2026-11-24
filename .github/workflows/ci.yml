@@ -29,12 +29,14 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore ViperSynapse.slnx
       - name: Build and test
+        env:
+          VSTEST_ARTIFACTS_DIRECTORY: ${{ runner.temp }}/vstest
         run: dotnet test ViperSynapse.slnx --configuration Release --no-restore
       - name: Check release output isolation
         run: bash tests/packaging-release-safety.sh
       - name: Install private desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth dbus fonts-dejavu-core libfontconfig1 libice6 libsm6 libxcursor1 libxi6 libxrandr2
+          sudo apt-get install -y --no-install-recommends xvfb xauth xdotool x11-xkb-utils xkb-data dbus at-spi2-core fonts-dejavu-core fontconfig libice6 libsm6 libxcursor1 libxi6 libxrandr2
       - name: Smoke test the native desktop with emulated devices
         run: tests/desktop-smoke/run.sh

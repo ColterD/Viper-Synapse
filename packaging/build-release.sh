@@ -2,12 +2,17 @@
 # Builds the Linux release artifacts into packaging/out (or VIPER_OUT):
 #   ViperSynapse-<ver>-linux-x64.tar.gz   self-contained, extract anywhere, run ./viper-synapse
 #   viper-synapse_<ver>_amd64.deb          system install, with the udev rule and uinput at boot
-# The default is VersionPrefix in Directory.Build.props. Set VIPER_VERSION to
-# an explicit release or candidate, for example VIPER_VERSION=0.0.9-rc.1.
+# The default comes from VersionPrefix and optional VersionSuffix in Directory.Build.props.
+# Set VIPER_VERSION to override it, for example VIPER_VERSION=0.0.10-rc.1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VER=${VIPER_VERSION:-$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)}
+VER=${VIPER_VERSION:-}
+if [[ -z $VER ]]; then
+    VER=$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)
+    suffix=$(grep -oPm1 '(?<=<VersionSuffix>)[^<]+' Directory.Build.props || true)
+    VER+=${suffix:+-$suffix}
+fi
 number='(0|[1-9][0-9]*)'
 if [[ ! $VER =~ ^$number\.$number\.$number(-rc\.$number)?$ ]]; then
     printf 'Invalid release version %q. Expected X.Y.Z or X.Y.Z-rc.N.\n' "$VER" >&2

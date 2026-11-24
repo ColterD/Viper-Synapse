@@ -22,7 +22,7 @@ public enum FunctionKind
     Disable,
 }
 
-public sealed record FunctionEntry(FunctionKind Kind, string Title, string Glyph);
+public sealed record FunctionEntry(FunctionKind Kind, string Title);
 
 public sealed record Choice<T>(T Value, string Label)
 {
@@ -40,18 +40,18 @@ public sealed partial class BindingEditorViewModel : ObservableObject
 
     public static IReadOnlyList<FunctionEntry> Functions { get; } =
     [
-        new(FunctionKind.Default, "DEFAULT", "↺"),
-        new(FunctionKind.Keyboard, "KEYBOARD FUNCTION", "⌨"),
-        new(FunctionKind.Mouse, "MOUSE FUNCTION", "🖱"),
-        new(FunctionKind.Gamepad, "GAMEPAD FUNCTION", "🎮"),
-        new(FunctionKind.Macro, "MACRO", "M"),
-        new(FunctionKind.Hypershift, "RAZER HYPERSHIFT", "⇧"),
-        new(FunctionKind.SwitchProfile, "SWITCH PROFILE", "⇄"),
-        new(FunctionKind.SwitchKeymap, "SWITCH KEYMAP", "▦"),
-        new(FunctionKind.Launch, "LAUNCH PROGRAM", "▶"),
-        new(FunctionKind.Multimedia, "MULTIMEDIA", "♪"),
-        new(FunctionKind.Text, "TEXT FUNCTION", "T"),
-        new(FunctionKind.Disable, "DISABLE", "⊘"),
+        new(FunctionKind.Default, "DEFAULT"),
+        new(FunctionKind.Keyboard, "KEYBOARD FUNCTION"),
+        new(FunctionKind.Mouse, "MOUSE FUNCTION"),
+        new(FunctionKind.Gamepad, "GAMEPAD FUNCTION"),
+        new(FunctionKind.Macro, "MACRO"),
+        new(FunctionKind.Hypershift, "RAZER HYPERSHIFT"),
+        new(FunctionKind.SwitchProfile, "SWITCH PROFILE"),
+        new(FunctionKind.SwitchKeymap, "SWITCH KEYMAP"),
+        new(FunctionKind.Launch, "LAUNCH PROGRAM"),
+        new(FunctionKind.Multimedia, "MULTIMEDIA"),
+        new(FunctionKind.Text, "TEXT FUNCTION"),
+        new(FunctionKind.Disable, "DISABLE"),
     ];
 
     public static IReadOnlyList<Choice<MouseFunction>> MouseFunctions { get; } =
@@ -81,19 +81,17 @@ public sealed partial class BindingEditorViewModel : ObservableObject
     public KeyRowViewModel Row { get; }
     public string Title { get; }
     public string? Target { get; }
-    public bool HasTargetStatus => Target != null || Conflict != null || SaveError != null || IsSaving;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasTargetStatus))]
     public partial string? Conflict { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasTargetStatus))]
     public partial bool IsSaving { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasTargetStatus))]
+    [NotifyPropertyChangedFor(nameof(SaveActionLabel))]
     public partial string? SaveError { get; set; }
+    public string SaveActionLabel => SaveError == null ? "Save" : "Retry save";
     public bool ShowNagaDpiNotice => Row.Key.Group == "dpi buttons";
 
     public BindingEditorViewModel(KeyRowViewModel row, Binding binding, MacroLibrary macros, IReadOnlyList<Profile> profiles, int keymaps,
@@ -102,7 +100,7 @@ public sealed partial class BindingEditorViewModel : ObservableObject
         Row = row;
         _save = save;
         _close = close;
-        Title = title ?? $"{row.Number}  {row.Key.Label}".Trim();
+        Title = title ?? $"{row.Number}  {row.ControlName}".Trim();
         Target = target;
         ProfileChoices = [new(null, "Cycle Up Profile"), new(Guid.Empty, "Cycle Down Profile"), .. profiles.Select(p => new Choice<Guid?>(p.Id, p.Name))];
         KeymapChoices = [new(-1, "Cycle Up Keymap"), new(-2, "Cycle Down Keymap"), .. Enumerable.Range(0, Math.Max(1, keymaps)).Select(i => new Choice<int>(i, $"Keymap {i + 1}"))];
@@ -133,7 +131,7 @@ public sealed partial class BindingEditorViewModel : ObservableObject
     [ObservableProperty] public partial bool Turbo { get; set; }
     [ObservableProperty] public partial double TurboRate { get; set; } = 10;
 
-    public string CapturedText => CapturedKey == 0 ? "Press a key" : BindingText.KeyLabel(CapturedKey);
+    public string CapturedText => CapturedKey == 0 ? "No key assigned" : BindingText.KeyLabel(CapturedKey);
 
     partial void OnCapturedKeyChanged(ushort value) => OnPropertyChanged(nameof(CapturedText));
 

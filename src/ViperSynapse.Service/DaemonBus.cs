@@ -32,6 +32,7 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
           <method name="ImportProfile"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="json"/><arg direction="in" type="b" name="replace"/><arg direction="in" type="b" name="allowLaunch"/></method>
           <method name="GetDeviceState"><arg direction="in" type="s" name="device"/><arg direction="out" type="s" name="json"/></method>
           <method name="GetUnitState"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="port"/><arg direction="in" type="s" name="productId"/><arg direction="in" type="s" name="serial"/><arg direction="out" type="s" name="json"/></method>
+          <method name="SelectManagedDpiStep"><arg direction="in" type="s" name="device"/><arg direction="in" type="s" name="port"/><arg direction="in" type="s" name="productId"/><arg direction="in" type="s" name="serial"/><arg direction="in" type="s" name="profile"/><arg direction="in" type="i" name="step"/><arg direction="in" type="i" name="x"/><arg direction="in" type="i" name="y"/><arg direction="out" type="s" name="json"/></method>
           <method name="Onboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
           <method name="BackupOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="backup"/></method>
           <method name="RestoreOnboard"><arg direction="in" type="s" name="request"/><arg direction="out" type="s" name="result"/></method>
@@ -73,6 +74,7 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
 
     public string Path => ObjectPath;
     public bool HandlesChildPaths => false;
+    internal Action RefreshDiscovery { get; init; }
 
     /// <param name="devices">The devices the service runs.</param>
     /// <param name="recordFrom">The input nodes a recording listens to.</param>
@@ -82,6 +84,7 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
         _quit = quit;
         _devices = devices;
         _recordFrom = recordFrom;
+        RefreshDiscovery = () => devices.Refresh(forceControlRetry: true);
         devices.DevicesChanged += () => Signal("DevicesChanged", null);
         devices.SettingsChanged += key => Signal("SettingsChanged", key);
         devices.StickMoved += SignalStick;
@@ -106,7 +109,7 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
         // Enqueue configuration mutations before dispatch. File locking alone cannot preserve the
         // order of two legacy callers that enqueue whole snapshots on the same connection.
         if (context.Request.InterfaceAsString == Interface && context.Request.MemberAsString is
-            "SetSettings" or "CommitSettings" or "SetMacros" or "CommitMacros" or "SetShortcuts" or "CommitShortcuts" or "ImportProfile")
+            "SetSettings" or "CommitSettings" or "SetMacros" or "CommitMacros" or "SetShortcuts" or "CommitShortcuts" or "ImportProfile" or "SelectManagedDpiStep")
         {
             lock (_mutationGate)
             {
@@ -214,6 +217,16 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
                 ReplyString(context, state == null ? "null" : System.Text.Json.JsonSerializer.Serialize(state, DeviceStateJson.Default.DeviceState));
                 break;
             }
+            case "SelectManagedDpiStep":
+            {
+                string key = DeviceKey(reader.ReadString()), port = reader.ReadString(), product = DeviceKey(reader.ReadString()), serial = reader.ReadString();
+                if (!Guid.TryParse(reader.ReadString(), out var profile))
+                    throw new ArgumentException("The profile ID is not a UUID.");
+                var state = _devices.SelectManagedDpiStep(key, port, product, serial, profile, reader.ReadInt32(),
+                    new(reader.ReadInt32(), reader.ReadInt32()));
+                ReplyString(context, System.Text.Json.JsonSerializer.Serialize(state, DeviceStateJson.Default.DeviceState));
+                break;
+            }
             case "Onboard":
             {
                 var onboard = BasiliskOnboard.ReadRequest(Json(reader.ReadString()));
@@ -263,7 +276,7 @@ public sealed class DaemonBus : IPathMethodHandler, IDisposable
                 break;
             case "RetryDiscovery":
                 _devices.RetryInputOutput();
-                _devices.Refresh(forceControlRetry: true);
+                RefreshDiscovery();
                 ReplyEmpty(context);
                 break;
             case "ActiveWindow":

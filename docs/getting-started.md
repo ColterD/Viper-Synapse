@@ -10,7 +10,7 @@ cd Viper-Synapse
 ./run.sh
 ```
 
-`run.sh` builds and launches the desktop app from the current checkout. Settings → About shows when the running build was made.
+`run.sh` builds and launches the desktop app from the current checkout. **Settings → General → About** shows the running version and build date.
 
 ## Set up device permissions
 
@@ -27,7 +27,15 @@ For a tarball, use the `70-viper-synapse.rules` file in the extracted directory.
 
 ## Install a packaged build
 
-Check the [fork’s Releases page](https://github.com/ColterD/Viper-Synapse/releases) for published builds. The Linux x64 tarball runs from its extracted directory with `./viper-synapse`. For a Debian package, install the downloaded file with `sudo apt install ./viper-synapse_*.deb` from its directory.
+Use the [stable download page](https://github.com/ColterD/Viper-Synapse/releases/latest) for stable builds and [release history](https://github.com/ColterD/Viper-Synapse/releases) for prereleases such as `v0.0.10-rc.1`. The Linux x64 archives include .NET. Only source builds need the SDK.
+
+Download `SHA256SUMS` from the same release as your package and put it beside the download. Verify the package before extracting or installing it.
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+Extract the Linux x64 tarball and run `./viper-synapse` in the extracted directory. For Debian, use the downloaded filename. For example, run `sudo apt install ./viper-synapse_0.0.10-rc.1_amd64.deb` from its directory for this candidate.
 
 ## Connect your first Razer device
 

@@ -26,11 +26,28 @@ internal sealed record DeviceHealth(string Model, string Connection, string Cont
             onboardFeature = onboardFeature with { Status = Unavailable, Reason = "Onboard management requires wired USB or HyperSpeed." };
         else if (onboard && control.Status == Available && info.OnboardProfile == null)
             onboardFeature = onboardFeature with { Status = "Unconfirmed", Reason = "Viper has not confirmed the active onboard profile." };
+        DeviceHealthFeature[] macroKeys = model?.ProductId == LegacyRemapControls.BlackWidowChromaV2
+            ? [info.NativeMacroKeys && info.InputIssue == null
+                ? new("M1–M5", Available, "Uses separate native reports for macro keys and ordinary keys.", "Report routing tested in emulation.")
+                : new("M1–M5", info.InputControlsStatus == "available" && info.InputControls?.Any(LegacyRemapControls.IsMacroSource) == true
+                    ? "Driver-dependent" : Unavailable,
+                    "The native macro reader is unavailable. Viper can use F13–F17 if the driver exposes them, but cannot recover held keys the driver releases early.",
+                    "Physical driver behavior unverified.")]
+            : [];
+        DeviceHealthFeature[] detentTilt = info.NagaTiltDetentsOnly
+            ? [new("Tilt wheel", "Detents only", "At least one direction reports wheel detents. Held actions and shortcuts that start by holding tilt require button press and release events.",
+                "Event routing tested in emulation.")]
+            : info.NagaTiltUsesEvdev
+            ? [new("Tilt wheel", "Driver-dependent", "Viper can act on wheel detents. Holding tilt for an action or shortcut requires the driver to send button press and release events.",
+                "Event routing tested in emulation.")]
+            : [];
 
         return new(info.Name, connection, control.Status, input.Status, info.Problem,
         [
             new("Software remapping", input.Status, input.Reason,
                 Emulated("Linux input routing on this connection") ?? "Feature-specific verification is not recorded."),
+            .. macroKeys,
+            .. detentTilt,
             Firmware(model?.Has("dpi_stages") == true ? "DPI stages" : "DPI sensitivity", model?.Has("dpi") == true,
                 receiver ? "Hardware: DPI table read. Stage changes tested in emulation." : Emulated("DPI stage updates")),
             Firmware("Polling rate", model?.Has("poll_rate") == true,

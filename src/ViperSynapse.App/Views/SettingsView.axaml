@@ -116,12 +116,13 @@
                 <StackPanel Name="GeneralProject" Classes="settingsSecond" Spacing="14">
                     <Border Classes="card settingsCard">
                         <StackPanel Spacing="10">
-                            <TextBlock Classes="heading" Text="What’s new" />
-                            <TextBlock Classes="deviceSectionTitle" Text="{x:Static services:ProjectLinks.FeaturedReleaseTag}" />
-                            <TextBlock TextWrapping="Wrap"
-                                       Text="This fork release adds Basilisk V4 Pro onboard tools, Device Health, legacy Chroma lighting and remapping, and offline Naga Chroma DPI diagnostics." />
-                            <HyperlinkButton Name="PublishedReleaseNotes" Content="Read release notes" NavigateUri="{x:Static services:ProjectLinks.FeaturedRelease}" />
-                            <HyperlinkButton Name="LatestRelease" Content="Latest release and Linux downloads" NavigateUri="{x:Static services:ProjectLinks.LatestRelease}" />
+                            <TextBlock Classes="heading" Text="Releases" />
+                            <HyperlinkButton Name="BuildReleaseNotes"
+                                             Content="{x:Static services:ProjectLinks.BuildReleaseTag}"
+                                             ToolTip.Tip="Release notes and downloads for this build"
+                                             NavigateUri="{x:Static services:ProjectLinks.BuildRelease}" />
+                            <HyperlinkButton Name="LatestStableRelease" Content="Latest stable release and Linux downloads"
+                                             NavigateUri="{x:Static services:ProjectLinks.LatestStableRelease}" />
                             <HyperlinkButton Content="Release history" NavigateUri="{x:Static services:ProjectLinks.Releases}" />
                         </StackPanel>
                     </Border>

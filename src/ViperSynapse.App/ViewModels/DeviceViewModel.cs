@@ -13,6 +13,8 @@ public sealed partial class KeyRowViewModel(DeviceKey key, bool bindingAvailable
 {
     public DeviceKey Key { get; } = key;
     public string Number => Key.Group == "linux input" ? "" : Key.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public string ControlName => Key.Group == "linux input" && Key.Code != 0 ? BindingText.KeyLabel(Key.Code) : Key.Label;
+    public string ControlDetails => Key.Label == ControlName ? Category : $"{Key.Label} · {Category}";
 
     /// <summary>Controls with no key of their own (the Tartarus's Hypershift button) are handled by the device.</summary>
     public bool Bindable => Key.Source != 0 && bindingAvailable;
@@ -21,24 +23,23 @@ public sealed partial class KeyRowViewModel(DeviceKey key, bool bindingAvailable
     public string? GroupTitle { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ControlDetails))]
     public partial string Category { get; set; } = "";
-
-    /// <summary>The list's shorter caption: KEYBOARD, not KEYBOARD FUNCTION, as Synapse 4 prints it there.</summary>
-    public string ListCategory => Key.Group is "linux input" or "macro keys" or "thumb grid" or "tilt wheel" or "dpi buttons" ? Key.Label :
-        Category.EndsWith(" FUNCTION", StringComparison.Ordinal) ? Category[..^" FUNCTION".Length] : Category;
-
-    partial void OnCategoryChanged(string value) => OnPropertyChanged(nameof(ListCategory));
 
     /// <summary>The key whose binding is open: its cell in the list is highlighted.</summary>
     [ObservableProperty]
     public partial bool IsSelected { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AssignmentLabel))]
     public partial string Value { get; set; } = "";
 
     /// <summary>Changed from what the key does by itself: shown green, as Synapse does.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AssignmentLabel))]
     public partial bool Changed { get; set; }
+
+    public string AssignmentLabel => !Changed && Value == ControlName ? "Default" : Value;
 }
 
 /// <summary>A keymap in the dropdown, with the colour Synapse gives it (the keypad's keymap light).</summary>
@@ -109,9 +110,10 @@ public sealed partial class DeviceViewModel : TabViewModel
         Lighting.ApplyToOthers += effect =>
         {
             foreach (var other in _main.Devices.Where(d => d != this && !d.IsBluetooth))
-                other.Lighting.Take(effect);
+                other.ReceiveLighting(effect);
         };
         Performance = new PerformanceViewModel(Model, p => PushProfile(x => x with { Performance = p }));
+        UpdateManagedDpiAvailability();
         Power = new PowerViewModel(p => PushProfile(x => x with { Power = p }));
         Calibration = new CalibrationViewModel(c => PushProfile(x => x with { Calibration = c }));
         ScrollWheel = new ScrollWheelViewModel(s => PushProfile(x => x with { Scroll = s }));
@@ -276,6 +278,8 @@ public sealed partial class DeviceViewModel : TabViewModel
     /// <summary>Links a program to one of this device's profiles (taking it off the others), or to none.</summary>
     public void LinkProgram(string program, Guid? profileId)
     {
+        if (!HasSoftwareSettings || _detached)
+            return;
         var profiles = _settings.Profiles.Select(p =>
         {
             var programs = p.LinkedPrograms.Where(x => !string.Equals(x, program, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -579,8 +583,10 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         OnPropertyChanged(nameof(IsCustomize));
         OnPropertyChanged(nameof(IsOnboardPage));
+        NotifySaveFeedback();
         KeepWatchingStick();
         RefreshOnboard();
+        RefreshDpiOnPerformancePage();
     }
 
     /// <summary>The tab came to the front.</summary>
@@ -588,6 +594,13 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         KeepWatchingStick();
         RefreshOnboard();
+        RefreshDpiOnPerformancePage();
+    }
+
+    void RefreshDpiOnPerformancePage()
+    {
+        if (_controlsReady && !_detached && SelectedPage == "PERFORMANCE" && Performance.SupportsManagedDpiSteps)
+            _ = RefreshLiveStateAsync();
     }
 
     internal void RefreshOnboard(IReadOnlyList<DeviceInfo>? snapshot = null)
@@ -610,6 +623,7 @@ public sealed partial class DeviceViewModel : TabViewModel
 
     BindingDraft? _bindingDraft;
     Action? _confirmProfileChange;
+    bool _confirmingKeymapReset;
 
     [ObservableProperty]
     public partial string? ConfirmationMessage { get; set; }
@@ -693,7 +707,9 @@ public sealed partial class DeviceViewModel : TabViewModel
         ? $"{UnitChoices.Count} connected units"
         : DeviceHealth.ConnectionLabel(Info);
 
-    public string Status => Info.Problem ?? (Info.Remapping ? "Active" : "Ready");
+    string? DeviceProblem => string.IsNullOrWhiteSpace(Info.Problem) ? DeviceHealth.AttentionReason(Info, Model) : Info.Problem;
+    public string Status => DeviceProblem ?? (Info.Remapping ? "Active" : "Ready");
+    public bool HasDeviceProblem => DeviceProblem != null;
     public string Details => Info.Connection switch
     {
         "bluetooth" when Info.Known => "Bluetooth · Linux input",
@@ -712,15 +728,20 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         NotifySaveFeedback();
         OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(HasDeviceProblem));
         OnPropertyChanged(nameof(Details));
         OnPropertyChanged(nameof(DashboardConnection));
         OnPropertyChanged(nameof(GenericControlsStatus));
         OnPropertyChanged(nameof(Health));
         if (!_controlsReady)
             return;
+        UpdateManagedDpiAvailability();
         bool endpointChanged = !SameBatteryEndpoint(oldValue, newValue) || oldValue.ProductId != newValue.ProductId;
         if (endpointChanged)
         {
+            Performance.ConfirmedDpiStep = null;
+            Performance.ManagedDpiProblem = null;
+            Performance.LastConfirmedManagedDpi = null;
             InvalidateLiveReads();
             ShowBattery(null, null);
             _deviceDefaults = null;
@@ -754,7 +775,11 @@ public sealed partial class DeviceViewModel : TabViewModel
         }
         if (endpointChanged && _loadedOnce)
             ApplyLiveDefaults();
+        if (Performance.SupportsManagedDpiSteps && oldValue.ManagedDpiRevision != newValue.ManagedDpiRevision)
+            _ = ReadDeviceAsync();
     }
+
+    void UpdateManagedDpiAvailability() => Performance.ManagedDpiAvailable = Performance.SupportsManagedDpiSteps && Info.ManagedDpiListening;
 
     IReadOnlyList<string> BuildPages()
     {
@@ -851,7 +876,7 @@ public sealed partial class DeviceViewModel : TabViewModel
             return false;
 
         bool Current() => !_detached && _settingsReadRequest == pending.Request &&
-            _main.DeviceSaveState(Key).Revision == pending.Revision && _main.GetSaveFeedback(Key)?.Error == null;
+            _main.DeviceSaveState(Key).Revision == pending.Revision && !_main.HasUnsavedProfileSettings(Key);
         try
         {
             await pending.Saved.ConfigureAwait(false);
@@ -879,11 +904,41 @@ public sealed partial class DeviceViewModel : TabViewModel
 
     bool _loadedOnce;
 
+    [ObservableProperty]
+    public partial bool HasSoftwareSettings { get; private set; }
+
+    Core.Lighting.ZoneEffect? _deferredLightingEffect;
+
+    void ReceiveLighting(Core.Lighting.ZoneEffect effect)
+    {
+        if (HasSoftwareSettings)
+            Lighting.Take(effect);
+        else
+            _deferredLightingEffect = effect;
+    }
+
+    void MarkSoftwareSettingsLoaded()
+    {
+        bool first = !HasSoftwareSettings;
+        HasSoftwareSettings = true;
+        if (_deferredLightingEffect is { } effect)
+        {
+            _deferredLightingEffect = null;
+            Lighting.Take(effect);
+        }
+        if (first)
+        {
+            _main.Macros.KeymapsChanged();
+            if (_main.SelectedTab == _main.LinkedGames)
+                _main.LinkedGames.Refresh();
+        }
+    }
+
     /// <summary>A profile or keymap that changed from outside the window (a linked game, the keypad's own buttons)
     /// is announced on screen when the user wants that. Changes made here never arrive as a difference.</summary>
     void AnnounceOutsideChange(DeviceSettings settings)
     {
-        if (!_loadedOnce || !_main.Settings.Notifications)
+        if (!HasSoftwareSettings || !_main.Settings.Notifications)
             return;
         string? what = settings.ActiveProfile != _settings.ActiveProfile ? $"Profile: {settings.Active.Name}"
             : settings.ActiveKeymap != _settings.ActiveKeymap && IsKeypad ? $"Keymap: {settings.ActiveKeymapOrFirst.Name}"
@@ -892,11 +947,11 @@ public sealed partial class DeviceViewModel : TabViewModel
             _ = _main.Client.NotifyAsync(ShortName, what);
     }
 
-    void Load(DeviceSettings settings, bool fromService = false)
+    void Load(DeviceSettings settings, bool fromService = false, bool preservePendingEdits = false)
     {
         if (fromService)
             AnnounceOutsideChange(settings);
-        bool keepDrafts = _loadedOnce && _settings.ActiveProfile == settings.ActiveProfile;
+        bool keepDrafts = preservePendingEdits || _loadedOnce && _settings.ActiveProfile == settings.ActiveProfile;
         _loadedOnce = true;
         _loading = true;
         try
@@ -926,6 +981,8 @@ public sealed partial class DeviceViewModel : TabViewModel
         {
             _loading = false;
         }
+        if (fromService)
+            MarkSoftwareSettingsLoaded();
         _main.Macros.KeymapsChanged();
     }
 
@@ -972,6 +1029,9 @@ public sealed partial class DeviceViewModel : TabViewModel
                 if (!Current())
                     return;
                 // A keypad reports a polling rate and no stages; its rate is still the device's own value.
+                Performance.ConfirmedDpiStep = state.ManagedDpiStep;
+                Performance.ManagedDpiProblem = state.ManagedDpiProblem;
+                Performance.LastConfirmedManagedDpi = state.LastConfirmedManagedDpi;
                 if (state.Stages is { Count: > 0 } || state.PollingRate > 0)
                     _deviceDefaults = new Core.Lighting.PerformanceSettings(state.Stages ?? [], state.ActiveStage, state.PollingRate);
                 // A mouse asleep answers nothing: keep the last reading rather than blanking it.
@@ -992,6 +1052,35 @@ public sealed partial class DeviceViewModel : TabViewModel
         catch (Exception e)
         {
             _main.Fail("Could not read the device", e, Current);
+        }
+    }
+
+    internal async Task ActivateDpiStageAsync(StageRow row)
+    {
+        if (!Performance.ManagedDpiSteps)
+        {
+            Performance.Activate(row);
+            return;
+        }
+        var unit = Info;
+        var profile = _settings.Active.Id;
+        bool Current() => !_detached && SameBatteryEndpoint(unit, Info) && unit.ProductId == Info.ProductId && _settings.Active.Id == profile;
+        try
+        {
+            FlushPendingEdits();
+            await _main.DeviceSaveState(Key).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            int step = row.Number - 1;
+            if (!Current() || !Performance.Stages.Contains(row) || _main.HasUnsavedProfileSettings(Key) ||
+                _settings.Active.Performance is not { ManagedDpiSteps: true } performance || step >= performance.Stages.Count)
+                return;
+            await _main.SelectManagedDpiStepAsync(unit, profile, step, performance.Stages[step]);
+            if (Current())
+                await ReadDeviceAsync();
+        }
+        catch (Exception error)
+        {
+            if (Current())
+                Performance.ManagedDpiProblem = $"Could not select the DPI step. {error.Message}";
         }
     }
 
@@ -1043,10 +1132,11 @@ public sealed partial class DeviceViewModel : TabViewModel
         {
             _bindingDraft = null;
             Editor = null;
-            OnPropertyChanged(nameof(CanRetrySave));
+            NotifySaveFeedback();
             return;
         }
         OpenEditor(value);
+        NotifySaveFeedback();
     }
 
     void OpenEditor(KeyRowViewModel row)
@@ -1060,7 +1150,11 @@ public sealed partial class DeviceViewModel : TabViewModel
             (_, value) => Save(draft, value), () =>
             {
                 if (ReferenceEquals(_bindingDraft, draft))
+                {
                     SelectedKey = null;
+                    if (draft.Revision > 0)
+                        _main.CancelBindingFailure(Key, draft.Revision);
+                }
             }, target: $"{profile.Name} · {draft.KeymapName} · {(draft.Hypershift ? "Hypershift" : "Standard")}");
         UpdateDraftConflict();
     }
@@ -1085,6 +1179,11 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         if (_bindingDraft is not { } draft || Editor is not { Conflict: null, IsSaving: false } editor)
             return;
+        if (_main.HasSettingsConflict(Key))
+        {
+            editor.Conflict = "The saved settings changed. Close this draft and choose Discard and reload… before editing the binding again.";
+            return;
+        }
         var profile = _settings.Profiles.FirstOrDefault(p => p.Id == draft.ProfileId);
         if (profile == null || draft.KeymapIndex >= profile.Keymaps.Count)
             editor.Conflict = "The original profile or keymap was removed. Close this draft to choose another target.";
@@ -1114,42 +1213,96 @@ public sealed partial class DeviceViewModel : TabViewModel
         if (Editor is not { Conflict: null, IsSaving: false } editor)
             return;
 
-        var profile = _settings.Profiles.First(p => p.Id == draft.ProfileId);
-        var keymap = profile.Keymaps[draft.KeymapIndex];
-        var layer = new Dictionary<ushort, Binding>(draft.Hypershift ? keymap.Hypershift : keymap.Standard);
-        if (binding is DefaultBinding) layer.Remove(draft.Source);
-        else layer[draft.Source] = binding;
-        keymap = draft.Hypershift ? keymap with { Hypershift = layer } : keymap with { Standard = layer };
+        // The queue and the displayed model share the same immutable results, so queued
+        // edits derived before the binding was acknowledged can reuse its saved revision.
+        var results = new System.Runtime.CompilerServices.ConditionalWeakTable<DeviceSettings, DeviceSettings>();
+        DeviceSettings Apply(DeviceSettings current, bool requireOriginal)
+        {
+            var profile = current.Profiles.FirstOrDefault(p => p.Id == draft.ProfileId);
+            if (profile == null || draft.KeymapIndex >= profile.Keymaps.Count || profile.Keymaps[draft.KeymapIndex].Name != draft.KeymapName)
+            {
+                if (requireOriginal)
+                    throw new SettingsConflictException();
+                return current;
+            }
+            var keymap = profile.Keymaps[draft.KeymapIndex];
+            var previous = LayerBinding(keymap, draft.Hypershift, draft.Source);
+            if (previous == binding)
+                return current;
+            if (previous != draft.StartingBinding)
+            {
+                if (requireOriginal)
+                    throw new SettingsConflictException();
+                return current;
+            }
+            return results.GetValue(current, snapshot =>
+            {
+                var assignments = new Dictionary<ushort, Binding>(draft.Hypershift ? keymap.Hypershift : keymap.Standard);
+                if (binding is DefaultBinding)
+                    assignments.Remove(draft.Source);
+                else
+                    assignments[draft.Source] = binding;
+                var maps = profile.Keymaps.ToArray();
+                maps[draft.KeymapIndex] = draft.Hypershift ? keymap with { Hypershift = assignments } : keymap with { Standard = assignments };
+                return snapshot with { Profiles = snapshot.Profiles.Select(p => p.Id == profile.Id ? p with { Keymaps = maps } : p).ToArray() };
+            });
+        }
+
         draft.SubmittedBinding = binding;
         editor.IsSaving = true;
         editor.SaveError = null;
-        var completion = Push(ReplaceKeymap(profile, draft.KeymapIndex, keymap));
-        draft.Revision = _main.DeviceSaveState(Key).Revision;
-        OnPropertyChanged(nameof(CanRetrySave));
-        _ = CompleteDraftSaveAsync(editor, completion);
+        var baseline = _settings;
+        long previousRevision = draft.Revision;
+        draft.Revision = _main.DeviceSaveState(Key).Revision + 1;
+        _ = _main.SaveDeviceSettings(Key, Apply(baseline, false), baseline, Apply,
+            error => CompleteDraftSave(editor, error, settings => Apply(settings, false)), previousRevision,
+            new(draft.ProfileId, draft.KeymapIndex, draft.KeymapName, draft.Hypershift, draft.Source));
+        NotifySaveFeedback();
     }
 
     bool OwnsBindingSave(long revision) => _bindingDraft?.Revision == revision && Editor != null;
 
-    async Task CompleteDraftSaveAsync(BindingEditorViewModel editor, Task<Exception?> completion)
+    void CompleteDraftSave(BindingEditorViewModel editor, Exception? error,
+        Func<DeviceSettings, DeviceSettings> apply)
     {
-        var error = await completion.ConfigureAwait(false);
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            if (!ReferenceEquals(Editor, editor))
-                return;
-            editor.IsSaving = false;
-            if (error == null)
-                SelectedKey = null;
-            else if (error is SettingsConflictException)
-                editor.Conflict = error.Message;
-            else
-                editor.SaveError = $"Could not save the binding. {error.Message} Edit the draft or select Save to retry.";
-        });
+        NotifySaveFeedback();
+        if (error == null)
+            ApplySavedBinding(apply);
+        if (!ReferenceEquals(Editor, editor))
+            return;
+        editor.IsSaving = false;
+        if (error == null)
+            SelectedKey = null;
+        else if (error is SettingsConflictException)
+            editor.Conflict = "The saved settings changed. Close this draft and choose Discard and reload… before editing the binding again.";
+        else
+            editor.SaveError = "Couldn't save this binding. Your draft is still open.";
+    }
+
+    internal void InitializeSavedSettings(DeviceSettings confirmedSettings)
+    {
+        if (_detached || HasSoftwareSettings)
+            return;
+        Load(confirmedSettings, preservePendingEdits: true);
+        MarkSoftwareSettingsLoaded();
+    }
+
+    internal void ApplySavedBinding(Func<DeviceSettings, DeviceSettings> apply)
+    {
+        if (_detached)
+            return;
+        var saved = apply(_settings);
+        if (!ReferenceEquals(saved, _settings))
+            Load(saved);
+        MarkSoftwareSettingsLoaded();
     }
 
     /// <summary>Binds a key in the Standard layer of the keymap in use (the MACRO tab's KEY BINDS assigns this way).</summary>
-    public void Bind(DeviceKey key, Binding binding) => Bind([(key, binding)]);
+    public void Bind(DeviceKey key, Binding binding)
+    {
+        if (HasSoftwareSettings && !_detached)
+            Bind([(key, binding)]);
+    }
 
     void Bind(IEnumerable<(DeviceKey Key, Binding Binding)> changes)
     {
@@ -1217,8 +1370,7 @@ public sealed partial class DeviceViewModel : TabViewModel
         if (_settings.Profiles.Count <= 1)
             return;
         var target = _settings.Active;
-        ConfirmationMessage = $"Delete the profile {target.Name}?";
-        _confirmProfileChange = () =>
+        SetProfileConfirmation($"Delete the profile {target.Name}?", () =>
         {
             var rest = _settings.Profiles.Where(p => p.Id != target.Id).ToList();
             if (rest.Count == 0 || rest.Count == _settings.Profiles.Count)
@@ -1227,7 +1379,7 @@ public sealed partial class DeviceViewModel : TabViewModel
             if (_settings.ActiveProfile == target.Id)
                 next = next with { ActiveProfile = rest[0].Id, ActiveKeymap = 0 };
             Push(next);
-        };
+        });
     }
 
     [RelayCommand]
@@ -1244,14 +1396,17 @@ public sealed partial class DeviceViewModel : TabViewModel
         });
     }
 
-    [RelayCommand]
+    bool CanResetKeymap => !_main.IsSavingBinding(Key);
+
+    [RelayCommand(CanExecute = nameof(CanResetKeymap))]
     void ResetKeymap()
     {
+        if (!CanResetKeymap)
+            return;
         var target = _settings.Active;
         int index = ActiveKeymapIndex;
         var original = CurrentKeymap;
-        ConfirmationMessage = $"Reset {original.Name} in {target.Name} to its defaults?";
-        _confirmProfileChange = () =>
+        SetProfileConfirmation($"Reset {original.Name} in {target.Name} to its defaults?", () =>
         {
             var profile = _settings.Profiles.FirstOrDefault(p => p.Id == target.Id);
             if (profile == null || index >= profile.Keymaps.Count || !SameKeymap(original, profile.Keymaps[index]))
@@ -1262,12 +1417,24 @@ public sealed partial class DeviceViewModel : TabViewModel
             if (_bindingDraft is { } draft && draft.ProfileId == profile.Id && draft.KeymapIndex == index && Editor != null)
                 Editor.Conflict = "The original keymap was reset. Close and reopen the editor to use its current bindings.";
             Push(ReplaceKeymap(profile, index, Keymap.Empty(original.Name)));
-        };
+        }, requiresIdleBindingQueue: true);
     }
 
-    [RelayCommand]
+    void SetProfileConfirmation(string message, Action confirm, bool requiresIdleBindingQueue = false)
+    {
+        _confirmingKeymapReset = requiresIdleBindingQueue;
+        _confirmProfileChange = confirm;
+        ConfirmationMessage = message;
+        ConfirmProfileChangeCommand.NotifyCanExecuteChanged();
+    }
+
+    bool CanConfirmProfileChange => !_confirmingKeymapReset || CanResetKeymap;
+
+    [RelayCommand(CanExecute = nameof(CanConfirmProfileChange))]
     void ConfirmProfileChange()
     {
+        if (!CanConfirmProfileChange)
+            return;
         var confirm = _confirmProfileChange;
         CancelProfileChange();
         confirm?.Invoke();
@@ -1278,6 +1445,8 @@ public sealed partial class DeviceViewModel : TabViewModel
     {
         ConfirmationMessage = null;
         _confirmProfileChange = null;
+        _confirmingKeymapReset = false;
+        ConfirmProfileChangeCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Shows the change at once and sends it to the service, which saves and applies it.</summary>

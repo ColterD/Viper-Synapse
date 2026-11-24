@@ -97,10 +97,26 @@
 
             <ContentControl Grid.Row="2" Content="{Binding SelectedTab}" />
 
-            <Border Grid.Row="3" Background="#3A1214" IsVisible="{Binding Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                    Padding="12,6">
-                <TextBlock Text="{Binding Problem}" Foreground="#FFB4B4" TextWrapping="Wrap" />
-            </Border>
+            <StackPanel Grid.Row="3">
+                <ScrollViewer MaxHeight="160" IsVisible="{Binding DeviceSaveNotices.Count, Converter={x:Static views:Converters.HasItems}}">
+                    <ItemsControl ItemsSource="{Binding DeviceSaveNotices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DeviceSaveNotice">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Background="#3A1214" Margin="0,1,0,0">
+                                    <TextBlock Text="{Binding Message}" Foreground="#FFB4B4" TextWrapping="Wrap"
+                                               Margin="12,6" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                                    <Button Grid.Column="1" Content="Open device" Margin="0,4,12,4" IsVisible="{Binding CanOpen}"
+                                            Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).OpenDeviceSaveCommand}"
+                                            CommandParameter="{Binding Device}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                <Border Background="#3A1214" IsVisible="{Binding Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" Padding="12,6">
+                    <TextBlock Text="{Binding Problem}" Foreground="#FFB4B4" TextWrapping="Wrap" />
+                </Border>
+            </StackPanel>
         </Grid>
 
         <!-- Resize edges: the window draws its own frame, so it offers its own handles. -->

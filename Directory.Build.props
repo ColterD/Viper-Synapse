@@ -23,7 +23,8 @@
     <Company>Viper Relay</Company>
     <Authors>codingncaffeine;ColterD and contributors</Authors>
     <Copyright>Copyright (C) 2026 Viper Synapse contributors</Copyright>
-    <VersionPrefix>0.0.8</VersionPrefix>
+    <VersionPrefix>0.0.10</VersionPrefix>
+    <VersionSuffix>rc.1</VersionSuffix>
   </PropertyGroup>
 
   <!-- Central package versions: bump here and nowhere else. -->

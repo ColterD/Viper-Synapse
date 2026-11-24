@@ -65,7 +65,7 @@ public class DeviceFailureRecoveryTests
     {
         var method = typeof(DeviceManager).GetMethod("RetireFailedSession", InstancePrivate);
         Assert.NotNull(method);
-        return (bool)method.Invoke(manager, [device, session, "event-test", new IOException("simulated loss")])!;
+        return (bool)method.Invoke(manager, [device, session, "event-test", new IOException("simulated loss"), false])!;
     }
 
     static void ScanModel(DeviceManager manager, string key)

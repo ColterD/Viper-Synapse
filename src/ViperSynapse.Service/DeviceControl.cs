@@ -21,7 +21,10 @@ public sealed record DeviceState(
     bool? ScrollAcceleration = null,
     bool? SmartReel = null,
     byte? OnboardProfile = null,
-    ScrollWheelMode? WheelMode = null);
+    ScrollWheelMode? WheelMode = null,
+    int? ManagedDpiStep = null,
+    string? ManagedDpiProblem = null,
+    DpiStage? LastConfirmedManagedDpi = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(DeviceState))]
@@ -49,6 +52,17 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     SlotSettings _protectedSettings = previousOnboardProfile.HasValue ? SlotSettings.All : 0;
     Profile? _lastRequestedProfile;
     PerformanceSettings? _dpiEditBaseline;
+    Guid _managedDpiProfile;
+    PerformanceSettings? _managedDpi;
+    int? _managedDpiStep;
+    DpiStage? _lastConfirmedManagedDpi;
+    bool _managedDpiEntryPending;
+    string? _managedDpiProblem;
+    internal string? ManagedDpiProblem => Volatile.Read(ref _managedDpiProblem);
+    // Replacing a control endpoint must not reuse a revision the UI has already seen.
+    static long _nextDpiRevision;
+    long _managedDpiRevision;
+    internal long ManagedDpiRevision => Volatile.Read(ref _managedDpiRevision);
     int _failedWrites;
     int _acknowledgedWrites;
     int _readbackConfirmations;
@@ -61,21 +75,35 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     public byte? OnboardProfile { get { lock (_gate) return _onboardProfile; } }
     int _sentKeymap = -1;
 
-    public string? LastProblem { get; private set; }
+    string? _lastProblem;
+    public string? LastProblem { get => _lastProblem; private set => _lastProblem = value; }
 
-    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing)
+    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing) =>
+        ApplyWithResult(port, productId, serial, profile, keymap, refreshing, out _);
+
+    internal UnitApplyOutcome ApplyWithResult(string port, string productId, string? serial, Profile profile, int keymap, bool refreshing,
+        out string? controlProblem)
     {
         lock (_gate)
         {
+            controlProblem = null;
             if (_disposed)
                 return new(port, productId, serial, UnitApplyStatus.Disconnected);
             int acknowledged = _acknowledgedWrites, confirmed = _readbackConfirmations;
+            long dpiRevision = _managedDpiRevision;
             Apply(profile, keymap, refreshing);
             acknowledged = _acknowledgedWrites - acknowledged;
             confirmed = _readbackConfirmations - confirmed;
-            var status = LastProblem != null ? UnitApplyStatus.Failed : acknowledged > 0 ? UnitApplyStatus.Acknowledged
+            controlProblem = LastProblem;
+            string? dpiProblem = _managedDpiRevision != dpiRevision ? _managedDpiProblem : null;
+            string? detail = (controlProblem, dpiProblem) switch
+            {
+                ({ } other, { } dpi) => other + " " + dpi,
+                var (other, dpi) => other ?? dpi,
+            };
+            var status = detail != null ? UnitApplyStatus.Failed : acknowledged > 0 ? UnitApplyStatus.Acknowledged
                 : confirmed > 0 ? UnitApplyStatus.ReadbackConfirmed : UnitApplyStatus.NoFirmwareChanges;
-            return new(port, productId, serial, status, LastProblem, acknowledged, confirmed);
+            return new(port, productId, serial, status, detail, acknowledged, confirmed);
         }
     }
 
@@ -89,6 +117,19 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             if (_disposed)
                 return;
             LastProblem = null;
+            bool managedDpi = IsNagaChroma && profile.Performance is { ManagedDpiSteps: true };
+            if (managedDpi)
+                ConfigureManagedDpi(profile);
+            else if (_managedDpi != null || _managedDpiProblem != null)
+            {
+                _managedDpi = null;
+                _managedDpiStep = null;
+                _lastConfirmedManagedDpi = null;
+                _managedDpiEntryPending = false;
+                _managedDpiProblem = null;
+                _sentPerformance = null;
+                MarkManagedDpiChanged();
+            }
             byte? store = HasOnboardProfiles ? ReadOnboardProfile() : DeviceCommands.VarStore;
             if (HasOnboardProfiles)
             {
@@ -117,7 +158,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             }
             if (profile.Performance is { } performance)
             {
-                if (store is byte dpiSlot && model?.Has("dpi") == true && SlotCanChange(SlotSettings.Dpi))
+                if (!managedDpi && store is byte dpiSlot && model?.Has("dpi") == true && SlotCanChange(SlotSettings.Dpi))
                     ApplyChanged(ref _sentPerformance, DpiOnly(performance), () => SendPerformance(performance, dpiSlot));
                 if (performance.PollingRate > 0 && performance.PollingRate != _sentPollingRate && model?.Has("poll_rate") == true)
                 {
@@ -151,6 +192,98 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
     }
 
     static PerformanceSettings DpiOnly(PerformanceSettings performance) => performance with { PollingRate = 0 };
+
+    internal static bool SameDpiSteps(PerformanceSettings? first, PerformanceSettings? next) =>
+        first is { Stages: { } firstStages } && next is { Stages: { } nextStages } && first.ManagedDpiSteps == next.ManagedDpiSteps &&
+        first.ActiveStage == next.ActiveStage && firstStages.SequenceEqual(nextStages);
+
+    void ConfigureManagedDpi(Profile profile)
+    {
+        var performance = profile.Performance!;
+        if (performance.Stages is not { Count: >= 1 and <= PerformanceSettings.MaxStages } ||
+            performance.Stages.Any(step => step == null || !NagaChromaSensitivity.IsValid(step.X, step.Y)))
+        {
+            _managedDpi = null;
+            _managedDpiStep = null;
+            _managedDpiProblem = "Managed DPI steps must contain one to five values from 100 to 16,000 DPI.";
+            MarkManagedDpiChanged();
+            return;
+        }
+        if (_managedDpiProfile != profile.Id || !SameDpiSteps(_managedDpi, performance))
+        {
+            _managedDpiProfile = profile.Id;
+            _managedDpi = performance;
+            if (_managedDpiStep is not int index || index >= performance.Stages.Count || performance.Stages[index] != _lastConfirmedManagedDpi)
+                _managedDpiStep = performance.Stages.Select((stage, index) => (stage, index))
+                    .Where(entry => entry.stage == _lastConfirmedManagedDpi).Select(entry => (int?)entry.index).FirstOrDefault();
+            _managedDpiProblem = null;
+            _managedDpiEntryPending = true;
+        }
+        if (_managedDpiEntryPending)
+            ApplyManagedDpiStep(Math.Clamp(performance.ActiveStage, 0, performance.Stages.Count - 1));
+    }
+
+    internal bool StepManagedDpi(Guid profileId, PerformanceSettings performance, int direction)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _managedDpiProfile != profileId || !SameDpiSteps(_managedDpi, performance))
+                return false;
+            int last = performance.Stages.Count - 1;
+            int target = (_managedDpiStep ?? Math.Clamp(performance.ActiveStage, 0, last)) + direction;
+            ApplyManagedDpiStep(Math.Clamp(target, 0, last), fromButton: true);
+            return true;
+        }
+    }
+
+    internal bool SelectManagedDpi(Guid profileId, int step, DpiStage expected)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _managedDpiProfile != profileId || _managedDpi is not { } performance ||
+                step < 0 || step >= performance.Stages.Count || performance.Stages[step] != expected)
+                return false;
+            ApplyManagedDpiStep(step);
+            return true;
+        }
+    }
+
+    void ApplyManagedDpiStep(int step, bool fromButton = false)
+    {
+        var target = _managedDpi!.Stages[step];
+        var request = DeviceCommands.Dpi(DpiTransactionId, target.X, target.Y);
+        string? problem = null;
+        bool wrote = Send(request, "managed DPI step", ref problem);
+        var actual = wrote ? ReadBack() : null;
+        if (fromButton && actual != null && actual != target)
+            actual = Send(request, "managed DPI step", ref problem) ? ReadBack() : null;
+        if (Confirm(actual == target, "managed DPI step", ref problem))
+        {
+            _managedDpiStep = step;
+            _lastConfirmedManagedDpi = target;
+            _managedDpiEntryPending = false;
+            _managedDpiProblem = null;
+        }
+        else
+        {
+            _managedDpiProblem = $"Could not confirm the requested DPI step. {problem}";
+        }
+        MarkManagedDpiChanged();
+
+        DpiStage? ReadBack()
+        {
+            // A physical press can also cause a firmware DPI change. Read after a short settling interval.
+            if (fromButton)
+                Thread.Sleep(40);
+            var actualDpi = ReadReport(NagaChromaSensitivity.ReadRequest(), ref problem) is { } reply
+                ? NagaChromaSensitivity.Decode(reply) : null;
+            if (actualDpi == null)
+                problem ??= "The mouse did not return a readable DPI value.";
+            return actualDpi;
+        }
+    }
+
+    void MarkManagedDpiChanged() => Volatile.Write(ref _managedDpiRevision, Interlocked.Increment(ref _nextDpiRevision));
     static ScrollSettings ScrollToggles(ScrollSettings scroll) => scroll with { LinesPerNotch = 1, WheelMode = null };
 
     bool SlotCanChange(SlotSettings settings) => (_protectedSettings & settings) == 0;
@@ -515,7 +648,9 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             Send(build(DeviceCommands.NoStore), what);
     }
 
-    bool Send(RazerReport request, string what)
+    bool Send(RazerReport request, string what) => Send(request, what, ref _lastProblem);
+
+    bool Send(RazerReport request, string what, ref string? problem)
     {
         try
         {
@@ -525,23 +660,25 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
                 _acknowledgedWrites++;
                 return true;
             }
-            LastProblem = $"The device did not acknowledge {what} ({answer.Status}).";
+            problem = $"The device did not acknowledge {what} ({answer.Status}).";
         }
         catch (IOException e)
         {
-            LastProblem = $"Could not send the {what}: {e.Message}";
+            problem = $"Could not send the {what}: {e.Message}";
         }
         _failedWrites++;
         return false;
     }
 
-    bool Confirm(bool confirmed, string what)
+    bool Confirm(bool confirmed, string what) => Confirm(confirmed, what, ref _lastProblem);
+
+    bool Confirm(bool confirmed, string what, ref string? problem)
     {
         if (confirmed)
             _readbackConfirmations++;
         else
         {
-            LastProblem ??= $"The device did not confirm the requested {what}.";
+            problem ??= $"The device did not confirm the requested {what}.";
             _failedWrites++;
         }
         return confirmed;
@@ -622,8 +759,15 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             {
                 LastProblem = e.Message;
             }
+            string? dpiProblem = _managedDpiProblem;
+            if (IsNagaChroma && _lastConfirmedManagedDpi is { } confirmed && stages is [var observed] && observed != confirmed)
+            {
+                string drift = $"Mouse now reports {observed.X} × {observed.Y} DPI, which differs from the last confirmed step.";
+                dpiProblem = dpiProblem == null ? drift : $"{dpiProblem} {drift}";
+            }
             return new DeviceState(stages, active, rate, battery, charging, liftOff, sleep, lowBattery,
-                acceleration, smartReel, HasOnboardProfiles ? store : null, wheelMode);
+                acceleration, smartReel, HasOnboardProfiles ? store : null, wheelMode, _managedDpiStep, dpiProblem,
+                _lastConfirmedManagedDpi);
         }
     }
 
@@ -642,7 +786,9 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
             ? (ScrollWheelMode)answer.Arguments[1] : null;
     }
 
-    RazerReport? ReadReport(RazerReport request)
+    RazerReport? ReadReport(RazerReport request) => ReadReport(request, ref _lastProblem);
+
+    RazerReport? ReadReport(RazerReport request, ref string? problem)
     {
         try
         {
@@ -651,7 +797,7 @@ public sealed partial class DeviceControl(RazerTransport transport, byte transac
         }
         catch (IOException e)
         {
-            LastProblem ??= e.Message;
+            problem ??= e.Message;
             return null;
         }
     }
