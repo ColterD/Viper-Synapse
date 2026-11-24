@@ -4,8 +4,9 @@
 
 This is [ColterD’s fork](https://github.com/ColterD/Viper-Synapse) of
 [Viper Synapse by codingncaffeine](https://github.com/codingncaffeine/Viper-Synapse).
-Viper Relay is the working name of the fork. The previously published v0.0.8 binaries display the former name in the app window.
-The executable and package are still named `viper-synapse`.
+This fork ships as Viper Relay. The executable, package, and settings directory use the name `viper-synapse`.
+
+The current candidate, `v0.0.10-rc.1`, adds configurable Naga Chroma DPI steps and tilt fallback, improves BlackWidow Chroma V2 macro recovery, and makes the remap editor easier to use with a keyboard. The device changes were tested in emulation. [Using Viper Relay](docs/using-viper-synapse.md) · [Device support](docs/device-support.md)
 
 A Razer Synapse–style control centre for Razer keyboards, keypads and mice on Linux: key and button
 remapping, Hypershift, macros, lighting, sensitivity stages, polling rate and power settings, in a window
@@ -57,14 +58,15 @@ Device support and validation:
 | --- | --- |
 | Tartarus V2 Pro | key bindings, macros, lighting and per-key colours — tested |
 | Naga Left-Handed Edition 2020 | protocol, sensitivity and polling tested on the device; buttons and lighting in testing |
-| Basilisk V4 Pro | wired and HyperSpeed configuration, provisional Bluetooth input support. See [connection and feature coverage](docs/basilisk-v4-pro.md). |
+| Basilisk V4 Pro | Wired and HyperSpeed configuration, with provisional Bluetooth input support. [Connection and feature coverage](docs/basilisk-v4-pro.md) |
+| Naga Chroma (`RZ01-0161`) | Configurable DPI steps, tilt, and thumb-button macros verified in emulation. |
+| BlackWidow Chroma V2 (`RZ03-0203`) | Native M1–M5 macros, held-key input, and startup recovery verified in emulation. |
 
-Other models in the catalogue are marked as untested in the app until someone confirms them.
+Check **Health** for feature and connection details, including whether a feature has been tested in emulation or on hardware.
 
 ## Install
 
-Use the [source setup guide](docs/getting-started.md#build-from-source) to try this fork. Packaged
-builds, when published, appear on the [fork’s Releases page](https://github.com/ColterD/Viper-Synapse/releases).
+Download a [stable release](https://github.com/ColterD/Viper-Synapse/releases/latest), or check [release history](https://github.com/ColterD/Viper-Synapse/releases) for the `v0.0.10-rc.1` prerelease. Both Linux x64 package formats are self-contained. See [Getting started](docs/getting-started.md) for checksum verification, installation, and building from source.
 
 ## Building
 
@@ -76,7 +78,7 @@ dotnet test ViperSynapse.slnx -c Release
 packaging/build-release.sh          # tarball and .deb in packaging/out
 ```
 
-Settings → About shows when the running build was made.
+**Settings → General → About** shows the running version and build date. **Releases** on the same page links to notes and downloads for that version.
 
 `viper-cli list` shows the Razer devices it can see; `viper-cli probe /dev/hidrawN` reads a device's
 serial, firmware and settings without changing anything.

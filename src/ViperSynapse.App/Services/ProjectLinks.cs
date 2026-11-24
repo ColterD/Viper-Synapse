@@ -5,12 +5,14 @@ internal static class ProjectLinks
     const string RepositoryUrl = "https://github.com/ColterD/Viper-Synapse";
 
     public static readonly Uri Repository = new(RepositoryUrl);
-    const string DocsUrl = RepositoryUrl + "/blob/main/docs/";
-    public const string FeaturedReleaseTag = "v0.0.8";
+    public static string BuildReleaseTag => "v" + AppBranding.Version;
+    static readonly string DocsUrl = RepositoryUrl + "/blob/" +
+        (AppBranding.Version == "unknown" ? "main" : BuildReleaseTag) + "/docs/";
 
-    public static readonly Uri LatestRelease = new(RepositoryUrl + "/releases/latest");
-    public static readonly Uri FeaturedRelease = new(RepositoryUrl + "/releases/tag/" + FeaturedReleaseTag);
     public static readonly Uri Releases = new(RepositoryUrl + "/releases");
+    public static readonly Uri LatestStableRelease = new(RepositoryUrl + "/releases/latest");
+    public static readonly Uri BuildRelease = AppBranding.Version == "unknown"
+        ? Releases : new(RepositoryUrl + "/releases/tag/" + BuildReleaseTag);
     public static readonly Uri Issues = new(RepositoryUrl + "/issues");
     public static readonly Uri Documentation = new(DocsUrl + "README.md");
     public static readonly Uri GettingStarted = new(DocsUrl + "getting-started.md");

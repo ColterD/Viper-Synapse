@@ -23,6 +23,8 @@ Use the .NET 10 SDK and run commands from the repository root. See [Getting star
 
 Put the Markdown file in `docs/` and add it to the [documentation library](README.md). Use the labels readers see in the app, and state the model and connection for device-specific instructions. Link prerequisites and related guides with relative paths so they work in GitHub and a local checkout.
 
+The app links Help and release notes to its version tag so prerelease builds lead to the matching documentation. For a source build whose version tag is pending, use the guides in the checkout.
+
 ## Run tests and build packages
 
 ```sh
@@ -53,6 +55,8 @@ The private X server has no X session manager. Avalonia 12.1.3 may log `SESSION_
 `packaging/build-release.sh` builds the self-contained Linux x64 tarball and Debian package under `packaging/out`. It uses the version in `Directory.Build.props`, including its prerelease suffix. Set `VIPER_VERSION` to override the version and `VIPER_OUT` to choose another output directory. The script builds in a fresh temporary directory and copies the two packages to the destination, where an existing package of the same version is replaced.
 
 Run `bash tests/packaging-release-safety.sh` to check that producing packages preserves existing files in the checkout and output directory. This check uses a temporary fixture and stub packaging tools.
+
+For a candidate, use an `X.Y.Z-rc.N` version and a matching `vX.Y.Z-rc.N` tag. The Debian package metadata uses `X.Y.Z~rc.N` so the final release sorts after the candidate. Build both archives from the reviewed commit, verify the version and payloads, and generate `SHA256SUMS` for the two downloads. Publish them together as a GitHub prerelease only after the candidate passes Build and test and CodeQL. Keep the AUR recipe on the latest stable release and update its tarball checksum when advancing that pin.
 
 ## Review changes
 

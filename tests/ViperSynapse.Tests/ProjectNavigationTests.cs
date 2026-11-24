@@ -68,9 +68,10 @@ public sealed class ProjectNavigationTests
                 var version = typeof(SettingsViewModel).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!
                     .InformationalVersion.Split('+', 2)[0];
                 Assert.Equal($"Running build {version}", view.FindControl<TextBlock>("RunningBuild")!.Text);
-                var notes = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("PublishedReleaseNotes"));
-                Assert.Equal("/ColterD/Viper-Synapse/releases/tag/v0.0.8", notes.NavigateUri!.AbsolutePath);
-                var latest = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("LatestRelease"));
+                var notes = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("BuildReleaseNotes"));
+                Assert.Equal($"v{version}", notes.Content);
+                Assert.Equal($"/ColterD/Viper-Synapse/releases/tag/v{version}", notes.NavigateUri!.AbsolutePath);
+                var latest = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("LatestStableRelease"));
                 Assert.Equal("/ColterD/Viper-Synapse/releases/latest", latest.NavigateUri!.AbsolutePath);
                 var repository = Assert.IsType<HyperlinkButton>(view.FindControl<HyperlinkButton>("ForkRepository"));
                 Assert.Equal("/ColterD/Viper-Synapse", repository.NavigateUri!.AbsolutePath);
@@ -102,7 +103,7 @@ public sealed class ProjectNavigationTests
                 Dispatcher.UIThread.RunJobs();
                 var content = Assert.IsType<StackPanel>(menu.Content);
                 var docs = Assert.Single(content.Children.OfType<HyperlinkButton>(), link => Equals(link.Content, "Documentation library"));
-                Assert.Equal("https://github.com/ColterD/Viper-Synapse/blob/main/docs/README.md", docs.NavigateUri!.AbsoluteUri);
+                Assert.Equal($"https://github.com/ColterD/Viper-Synapse/blob/v{AppBranding.Version}/docs/README.md", docs.NavigateUri!.AbsoluteUri);
                 var copy = Assert.Single(content.Children.OfType<Button>(), button => Equals(button.Content, "Copy documentation link"));
                 copy.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal(docs.NavigateUri.AbsoluteUri, await window.Clipboard!.TryGetTextAsync());

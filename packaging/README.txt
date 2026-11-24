@@ -6,6 +6,10 @@ Key bindings, macros, lighting and sensitivity for Razer keyboards, keypads and 
 Run ./viper-synapse to open the window. It starts its background service (viper-synapsed) by itself;
 viper-cli lists and probes devices from a terminal.
 
+This build includes its .NET runtime. Run ./viper-synapse --version or open Settings > General >
+About to identify the running build. The Releases card links to its notes and to stable downloads.
+When downloading an archive, verify it against SHA256SUMS from the same release.
+
 One-time setup (the .deb and AUR packages do this for you)
 ---------------------------------------------------------
 Viper Relay talks to Razer devices directly and types through a virtual keyboard. Both need the udev

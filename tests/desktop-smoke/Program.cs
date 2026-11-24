@@ -329,7 +329,8 @@ static class Program
         window.AddHandler(InputElement.KeyDownEvent, ObserveInput, RoutingStrategies.Tunnel, handledEventsToo: true);
         try
         {
-            await KeyAsync("F8");
+            // Clearing modifiers can send a synthetic key-down before the one-shot capture key.
+            await NativeInputAsync("key", "F8");
             await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_F8", "Capture did not receive F8.");
         }
         catch (TimeoutException)

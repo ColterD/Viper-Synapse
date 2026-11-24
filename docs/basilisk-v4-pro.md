@@ -1,6 +1,6 @@
 # Basilisk V4 Pro support
 
-Viper Synapse uses the same local profile for the wired, HyperSpeed, and Bluetooth versions of the Basilisk V4 Pro. The wired and HyperSpeed connections support the vendor control reports. Pair Bluetooth in your desktop's Bluetooth settings. Once paired, Viper uses the Linux input events the mouse exposes.
+Viper Relay uses the same local profile for the wired, HyperSpeed, and Bluetooth versions of the Basilisk V4 Pro. The wired and HyperSpeed connections support the vendor control reports. Pair Bluetooth in your desktop's Bluetooth settings. Once paired, Viper uses the Linux input events the mouse exposes.
 
 | Feature | Wired USB `1532:00E2` | HyperSpeed `1532:00E3` | Bluetooth |
 | --- | --- | --- | --- |
