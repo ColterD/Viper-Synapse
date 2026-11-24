@@ -59,10 +59,13 @@ public sealed class FocusWatcher : IDisposable
         var desktop = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? "";
         if (desktop.Contains("KDE", StringComparison.OrdinalIgnoreCase) && sessionBus != null && await StartKWinAsync(sessionBus).ConfigureAwait(false))
             Method = "kwin";
-        else if (Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE") is { Length: > 0 } signature)
+        else if (ResolveHyprlandSocketPath(
+            Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE"),
+            Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
+            Environment.GetEnvironmentVariable("UID")) is { } socketPath)
         {
             Method = "hyprland";
-            _ = Task.Run(() => WatchHyprland(signature));
+            _ = Task.Run(() => WatchHyprland(socketPath));
         }
         else if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
         {
@@ -197,10 +200,30 @@ public sealed class FocusWatcher : IDisposable
 
     // ---- Hyprland ---------------------------------------------------------------------------------------
 
-    async Task WatchHyprland(string signature)
+    internal static string? ResolveHyprlandSocketPath(string? signature, string? runtime, string? uid)
     {
-        var runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") ?? $"/run/user/{Environment.GetEnvironmentVariable("UID")}";
-        var socketPath = Path.Combine(runtime, "hypr", signature, ".socket2.sock");
+        if (string.IsNullOrWhiteSpace(signature)
+            || signature is "." or ".."
+            || signature.IndexOfAny(['/', '\\', '\0']) >= 0)
+            return null;
+
+        if (!string.IsNullOrEmpty(runtime))
+        {
+            if (!Path.IsPathFullyQualified(runtime) || runtime.Contains('\0'))
+                return null;
+        }
+        else
+        {
+            if (string.IsNullOrEmpty(uid) || !uid.All(char.IsAsciiDigit))
+                return null;
+            runtime = Path.Join("/run/user", uid);
+        }
+
+        return Path.Join(runtime, "hypr", signature, ".socket2.sock");
+    }
+
+    async Task WatchHyprland(string socketPath)
+    {
         try
         {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
