@@ -37,6 +37,6 @@ jobs:
       - name: Install private desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth xdotool dbus at-spi2-core fonts-dejavu-core fontconfig libice6 libsm6 libxcursor1 libxi6 libxrandr2
+          sudo apt-get install -y --no-install-recommends xvfb xauth xdotool x11-xkb-utils xkb-data dbus at-spi2-core fonts-dejavu-core fontconfig libice6 libsm6 libxcursor1 libxi6 libxrandr2
       - name: Smoke test the native desktop with emulated devices
         run: tests/desktop-smoke/run.sh

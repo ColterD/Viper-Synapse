@@ -324,8 +324,24 @@ static class Program
         await KeyAsync("space");
         await UntilAsync(() => capture.IsFocused && Equals(capture.Content, "Listening…"),
             "Capture did not enter listening mode with keyboard focus.");
-        await KeyAsync("F8");
-        await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_F8", "Capture did not receive F8.");
+        KeyEventArgs? input = null;
+        void ObserveInput(object? sender, KeyEventArgs e) => input = e;
+        window.AddHandler(InputElement.KeyDownEvent, ObserveInput, RoutingStrategies.Tunnel, handledEventsToo: true);
+        try
+        {
+            await KeyAsync("F8");
+            await UntilAsync(() => KeyCodes.Name(draft.CapturedKey) == "KEY_F8", "Capture did not receive F8.");
+        }
+        catch (TimeoutException)
+        {
+            Console.Error.WriteLine($"Capture input: key={input?.Key}, physical={input?.PhysicalKey}, source={input?.Source?.GetType().Name}; " +
+                $"focus={window.FocusManager?.GetFocusedElement()}, label={capture.Content}, selected={KeyCodes.Name(draft.CapturedKey)}.");
+            throw;
+        }
+        finally
+        {
+            window.RemoveHandler(InputElement.KeyDownEvent, ObserveInput);
+        }
         await UntilAsync(() => Equals(capture.Content, "Capture key"), "Capture kept listening after receiving F8.");
         await TabToAsync(window, save);
         await CaptureAsync("remap-save-focused");

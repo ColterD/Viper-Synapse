@@ -33,13 +33,13 @@ Tests that write settings to a plugged-in device require `VIPER_HARDWARE_TESTS=1
 
 ### Private desktop smoke test
 
-Install .NET 10, Xvfb, xauth, xdotool, D-Bus, AT-SPI (`at-spi2-core`), Fontconfig (`fc-cache`), and DejaVu fonts, then run:
+Install .NET 10, Xvfb, xauth, xdotool, XKB tools and data (`setxkbmap`, `xkb-data`), D-Bus, AT-SPI (`at-spi2-core`), Fontconfig (`fc-cache`), and DejaVu fonts, then run:
 
 ```sh
 tests/desktop-smoke/run.sh
 ```
 
-The script starts a new X server and session bus with temporary app state. It builds a private Fontconfig cache from the installed fonts before opening the window. It uses a native Avalonia window and a daemon with emulated devices. It checks navigation at the minimum width and 150% scaling, direct access to an affected unit's Health page, save failure and retry, keyboard activation of the remap and per-key lighting controls, and unplugging during an uncommitted edit. The remap walkthrough sends native X11 keyboard input to check Tab traversal, visible focus, retry, and focus return. The headless suite covers additional behavior and protocol failures.
+The script starts a new X server and session bus with temporary app state. It sets the private server to a US keyboard layout and builds a private Fontconfig cache before opening the window. It uses a native Avalonia window and a daemon with emulated devices. It checks navigation at the minimum width and 150% scaling, direct access to an affected unit's Health page, save failure and retry, keyboard activation of the remap and per-key lighting controls, and unplugging during an uncommitted edit. The remap walkthrough sends native X11 keyboard input to check Tab traversal, visible focus, retry, and focus return. The headless suite covers additional behavior and protocol failures.
 
 The smoke test reports page-switch time and managed allocation samples for synchronous device drawing. Compare samples on the same machine and configuration before using them to evaluate a rendering change. The runner also accepts build flags such as an offline restore configuration and a `DOTNET` SDK path override.
 

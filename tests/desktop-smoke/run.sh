@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 dotnet=${DOTNET:-dotnet}
-for command in "$dotnet" Xvfb xvfb-run xauth xdotool dbus-run-session fc-cache; do
+for command in "$dotnet" Xvfb xvfb-run xauth xdotool setxkbmap dbus-run-session fc-cache; do
     if ! command -v "$command" >/dev/null; then
         printf 'Desktop smoke requires %s. See docs/development.md.\n' "$command" >&2
         exit 127
@@ -74,7 +74,9 @@ if [[ ${VIPER_DESKTOP_SMOKE_BACKTRACE:-0} == 1 ]]; then
         -ex 'handle SIGPIPE nostop noprint pass' -ex 'handle SIG34 nostop noprint pass'
         -ex run -ex 'thread apply all bt 12' --args "${launch[@]}")
 fi
-if xvfb-run -a -e "$scratch/xvfb.log" -s '-screen 0 2304x1440x24 -nolisten tcp -extension GLX' \
+# Keep the explicit keymap when setxkbmap disconnects before Avalonia joins.
+if xvfb-run -a -e "$scratch/xvfb.log" -s '-screen 0 2304x1440x24 -nolisten tcp -extension GLX -noreset' \
+        bash -c 'setxkbmap -rules evdev -model pc105 -layout us -option "" && exec "$@"' _ \
         dbus-run-session --config-file="$scratch/session.conf" -- "${launch[@]}"; then
     exit 0
 else
