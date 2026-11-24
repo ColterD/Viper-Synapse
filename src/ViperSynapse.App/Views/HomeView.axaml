@@ -2,15 +2,16 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ViperSynapse.App.ViewModels"
              xmlns:views="using:ViperSynapse.App.Views"
+             xmlns:controls="using:ViperSynapse.App.Controls"
              xmlns:devices="using:ViperSynapse.Core.Devices"
              x:Class="ViperSynapse.App.Views.HomeView"
              x:DataType="vm:HomeViewModel">
     <UserControl.Styles>
-        <Style Selector="UniformGrid.deviceCards">
+        <Style Selector="controls|DeviceCardsPanel">
             <Setter Property="Columns" Value="1" />
         </Style>
         <ContainerQuery Name="dashboard" Query="min-width:1180">
-            <Style Selector="UniformGrid.deviceCards">
+            <Style Selector="controls|DeviceCardsPanel">
                 <Setter Property="Columns" Value="2" />
             </Style>
         </ContainerQuery>
@@ -19,7 +20,8 @@
         <ScrollViewer IsVisible="{Binding ShowDevicesPage}" HorizontalScrollBarVisibility="Disabled">
             <StackPanel MaxWidth="1280" Margin="28,24" Spacing="16">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                    <TextBlock Text="Devices" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Name="DevicesHeading" Text="Devices" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Focusable="True" IsTabStop="False" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <Button Content="Refresh devices" Command="{Binding RefreshCommand}"
                                 IsVisible="{Binding HasScanResult}" />
@@ -67,9 +69,7 @@
                     </Border>
                     <ItemsControl Name="ConnectedDeviceCards" ItemsSource="{Binding Devices}">
                         <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <UniformGrid Classes="deviceCards" ColumnSpacing="12" RowSpacing="10" />
-                            </ItemsPanelTemplate>
+                            <ItemsPanelTemplate><controls:DeviceCardsPanel ColumnSpacing="12" RowSpacing="10" /></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DeviceViewModel">
@@ -132,7 +132,8 @@
                         <StackPanel Spacing="12">
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Text="SHORTCUTS" Foreground="{DynamicResource AccentBrush}" FontSize="13" VerticalAlignment="Center" />
-                                <Button Grid.Column="1" Classes="flat" Content="+" FontSize="20" FontWeight="Light" ToolTip.Tip="Add a shortcut" Command="{Binding AddCommand}" />
+                                <Button Name="AddShortcutButton" Grid.Column="1" Classes="flat" Content="+" FontSize="20" FontWeight="Light"
+                                        ToolTip.Tip="Add a shortcut" AutomationProperties.Name="Add a shortcut" Click="EditShortcut" />
                             </Grid>
                             <TextBlock Foreground="#DDDDDD" FontSize="12" TextWrapping="Wrap"
                                        Text="Global shortcuts work across profiles for devices whose input the app manages." />
@@ -161,8 +162,8 @@
                                                         <Run Text="{Binding Category}" /><Run Text=":  " /><Run Text="{Binding Function}" />
                                                     </TextBlock>
                                                 </StackPanel>
-                                                <Button Grid.Column="1" Classes="flat" Content="✎" ToolTip.Tip="Edit"
-                                                        Command="{Binding $parent[ItemsControl].((vm:ShortcutsViewModel)DataContext).ChangeCommand}" CommandParameter="{Binding}" />
+                                                <Button Grid.Column="1" Classes="flat shortcutEdit" Content="✎" ToolTip.Tip="Edit"
+                                                        AutomationProperties.Name="Edit shortcut" Click="EditShortcut" />
                                                 <Button Grid.Column="2" Classes="flat" Content="🗑" ToolTip.Tip="Delete"
                                                         Command="{Binding $parent[ItemsControl].((vm:ShortcutsViewModel)DataContext).DeleteCommand}" CommandParameter="{Binding}" />
                                             </Grid>
@@ -170,7 +171,7 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <Button Command="{Binding AddCommand}" Background="Transparent" Padding="0" HorizontalAlignment="Stretch"
+                            <Button Click="EditShortcut" Background="Transparent" Padding="0" HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Stretch" Cursor="Hand" Margin="0,4,0,8">
                                 <Panel Height="50">
                                     <Rectangle Stroke="#7A7A7A" StrokeThickness="1" StrokeDashArray="4,3" />
@@ -218,7 +219,13 @@
                                            IsVisible="{Binding Problem, Converter={x:Static ObjectConverters.IsNotNull}}" />
                             </StackPanel>
                         </Border>
-                        <views:BindingFlyout DataContext="{Binding Editor}" IsVisible="{Binding $parent[StackPanel].((vm:ShortcutsViewModel)DataContext).Editing}" />
+                        <ContentControl Content="{Binding Editor}" IsVisible="{Binding Editing}">
+                            <ContentControl.ContentTemplate>
+                                <DataTemplate x:DataType="vm:BindingEditorViewModel">
+                                    <views:BindingFlyout MaxHeight="420" />
+                                </DataTemplate>
+                            </ContentControl.ContentTemplate>
+                        </ContentControl>
                     </StackPanel>
                 </StackPanel>
             </StackPanel>

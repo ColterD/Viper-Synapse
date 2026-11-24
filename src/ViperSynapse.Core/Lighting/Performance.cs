@@ -7,6 +7,9 @@ public sealed record DpiStage(int X, int Y);
 /// (0 = leave it as it is).</summary>
 public sealed record PerformanceSettings(IReadOnlyList<DpiStage> Stages, int ActiveStage, int PollingRate)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ManagedDpiSteps { get; init; }
+
     public const int MaxStages = 5;
 
     public static PerformanceSettings Default { get; } =

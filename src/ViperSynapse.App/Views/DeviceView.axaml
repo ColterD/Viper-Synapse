@@ -50,7 +50,7 @@
             </Style>
         </ContainerQuery>
     </UserControl.Styles>
-    <Grid RowDefinitions="Auto,Auto,Auto,*" Container.Name="device" Container.Sizing="Width" IsEnabled="{Binding !ReloadingSave}">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Container.Name="device" Container.Sizing="Width" IsEnabled="{Binding !ReloadingSave}">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" MinHeight="42" Margin="16,2,16,6">
             <ListBox Name="DevicePages" Classes="pills devicePages" VerticalAlignment="Center" HorizontalAlignment="Left"
                      AutomationProperties.Name="Device pages" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -71,14 +71,26 @@
                         <Border Width="2" Height="5" Background="#BBBBBB" VerticalAlignment="Center" CornerRadius="0,1,1,0" />
                     </StackPanel>
                 </StackPanel>
-                <TextBlock Classes="caption" Text="{Binding Status}" ToolTip.Tip="{Binding Status}" VerticalAlignment="Center"
-                           MaxWidth="120" TextTrimming="CharacterEllipsis" />
+                <TextBlock Classes="caption" Text="{Binding Status}" VerticalAlignment="Center" IsVisible="{Binding !HasDeviceProblem}" />
             </StackPanel>
         </Grid>
 
-        <StackPanel Grid.Row="1" Name="ProfileControls" Spacing="8" Margin="16,0,16,8"
+        <StackPanel Grid.Row="1" Margin="16,0">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="0,0,0,8" IsVisible="{Binding HasDeviceProblem}">
+                <TextBlock Text="{Binding Status}" Classes="deviceStatusText statusWarning" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="link" Content="Health" Click="ShowHealth" />
+            </Grid>
+            <Grid Name="DeviceSaveStatus" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,0,0,8" IsVisible="{Binding HasSaveStatus}">
+                <TextBlock Text="{Binding SaveStatus}" Classes="deviceDetail" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                <Button Grid.Column="1" Content="Retry save" IsVisible="{Binding CanRetrySave}" Command="{Binding RetrySaveCommand}" />
+                <Button Grid.Column="1" Content="Discard and reload…" IsVisible="{Binding CanReloadSave}" Command="{Binding RequestReloadSaveCommand}" />
+                <Button Grid.Column="1" Content="Return to binding" IsVisible="{Binding CanShowBindingSave}" Command="{Binding ShowBindingSaveCommand}" />
+            </Grid>
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Name="ProfileControls" Spacing="8" Margin="16,0,16,8"
                     IsVisible="{Binding !IsOnboardPage}">
-            <WrapPanel ItemSpacing="12" LineSpacing="6">
+            <WrapPanel ItemSpacing="12" LineSpacing="6" IsEnabled="{Binding HasSoftwareSettings}">
                 <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                     <TextBlock Classes="caption" Text="Software profile" VerticalAlignment="Center" />
                     <ComboBox Name="DeviceProfileBox" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" Width="190"
@@ -123,8 +135,9 @@
                     </Button>
                 </StackPanel>
             </WrapPanel>
+            <TextBlock Name="DeviceUnitScope" Classes="caption" Text="{Binding UnitScope}" TextWrapping="Wrap" />
 
-            <Grid ColumnDefinitions="Auto,250,*" ColumnSpacing="12">
+            <Grid ColumnDefinitions="Auto,250" ColumnSpacing="12">
                 <TextBlock Classes="caption" Text="Inspect unit" VerticalAlignment="Center" />
                 <ComboBox Name="InspectedUnitBox" Grid.Column="1" ItemsSource="{Binding UnitChoices}" SelectedItem="{Binding InspectedUnit, Mode=TwoWay}"
                           HorizontalAlignment="Stretch" AutomationProperties.Name="Inspect unit">
@@ -134,17 +147,10 @@
                         </DataTemplate>
                     </ComboBox.ItemTemplate>
                 </ComboBox>
-                <TextBlock Name="DeviceUnitScope" Classes="caption" Grid.Column="2" Text="{Binding UnitScope}"
-                           VerticalAlignment="Center" TextWrapping="Wrap" />
-            </Grid>
-            <Grid Name="DeviceSaveStatus" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding HasSaveStatus}">
-                <TextBlock Text="{Binding SaveStatus}" Classes="deviceDetail" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
-                <Button Grid.Column="1" Content="Retry save" IsVisible="{Binding CanRetrySave}" Command="{Binding RetrySaveCommand}" />
-                <Button Grid.Column="1" Content="Discard and reload…" IsVisible="{Binding CanReloadSave}" Command="{Binding RequestReloadSaveCommand}" />
             </Grid>
         </StackPanel>
 
-        <Border Grid.Row="2" Name="ProfileChangeConfirmation" Classes="devicePanel statusNotice" Margin="16,0,16,8" Padding="12"
+        <Border Grid.Row="3" Name="ProfileChangeConfirmation" Classes="devicePanel statusNotice" Margin="16,0,16,8" Padding="12"
                 IsVisible="{Binding ConfirmationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                 <TextBlock Text="{Binding ConfirmationMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
@@ -156,13 +162,14 @@
         </Border>
 
         <!-- CUSTOMIZE -->
-        <Grid Grid.Row="3" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*"
+        <Grid Grid.Row="4" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*" IsEnabled="{Binding HasSoftwareSettings}"
               IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CUSTOMIZE}">
             <Border Name="CustomizeKeyList" Background="{StaticResource SideBrush}" IsVisible="{Binding ShowKeyList}">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="14,12,6,8">
                         <ComboBox ItemsSource="{Binding KeyFilters}" SelectedItem="{Binding SelectedKeyFilter}" Width="142" HorizontalAlignment="Left" />
-                        <Button Grid.Column="1" Classes="flat" Content="⇤" ToolTip.Tip="Hide the key list" Command="{Binding ToggleKeyListCommand}" />
+                        <Button Grid.Column="1" Classes="flat" Content="⇤" ToolTip.Tip="Hide the key list"
+                                AutomationProperties.Name="Hide the key list" Command="{Binding ToggleKeyListCommand}" />
                     </Grid>
                     <Border DockPanel.Dock="Top" Height="1" Background="#2A2A2A" />
                     <ScrollViewer>
@@ -185,14 +192,14 @@
                                 <ItemsControl.DataTemplates>
                                     <DataTemplate x:DataType="vm:KeyRowViewModel">
                                         <Button Classes="keyCell" Classes.selected="{Binding IsSelected}" IsEnabled="{Binding Bindable}"
-                                                AutomationProperties.Name="{Binding Key.Label}"
-                                                Command="{Binding $parent[UserControl].((vm:DeviceViewModel)DataContext).SelectKeyCommand}" CommandParameter="{Binding}">
+                                                AutomationProperties.Name="{Binding ControlName}" ToolTip.Tip="{Binding ControlDetails}"
+                                                Click="OpenBinding">
                                             <Grid ColumnDefinitions="34,1,*">
                                                 <TextBlock Text="{Binding Number}" FontSize="12" Foreground="#CCCCCC" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                 <Rectangle Grid.Column="1" Fill="#4A4A4A" Margin="0,6" />
                                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="6,0" Spacing="0">
-                                                    <TextBlock Text="{Binding ListCategory}" Classes="caption" />
-                                                    <TextBlock Text="{Binding Value}" FontSize="12" TextTrimming="CharacterEllipsis"
+                                                    <TextBlock Text="{Binding ControlName}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                    <TextBlock Text="{Binding AssignmentLabel}" Classes="caption" TextWrapping="Wrap"
                                                                Classes.green="{Binding Changed}" />
                                                 </StackPanel>
                                             </Grid>
@@ -224,7 +231,7 @@
                 <ScrollViewer HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Spacing="14" Margin="0,0,0,20">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="10">
-                            <ToggleButton Classes="remap" IsChecked="{Binding ShowKeyList}" ToolTip.Tip="Show key list" AutomationProperties.Name="Show key list">
+                            <ToggleButton Name="KeyListToggle" Classes="remap" IsChecked="{Binding ShowKeyList}" ToolTip.Tip="Show key list" AutomationProperties.Name="Show key list">
                                 <Rectangle Width="14" Height="11" Stroke="#FFFFFF" StrokeThickness="1.5" />
                             </ToggleButton>
                             <Border CornerRadius="14" BorderBrush="#4A4A4A" BorderThickness="1" Padding="2">
@@ -293,32 +300,35 @@
                                 </StackPanel>
                             </Border>
                             <Border Classes="card" Width="540" IsVisible="{Binding IsMouse}">
-                                <StackPanel Spacing="10" DataContext="{Binding ScrollWheel}" x:DataType="vm:ScrollWheelViewModel">
+                                <StackPanel Spacing="10">
                                     <TextBlock Classes="heading" Text="SCROLL WHEEL" />
                                     <TextBlock Text="SCROLL SPEED" Foreground="#FFFFFF" FontSize="12" />
                                     <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap"
                                                Text="How far each notch of the wheel scrolls: 1 is the mouse's own speed, 3 scrolls three times as far." />
-                                    <controls:ValueSlider Value="{Binding LinesPerNotch}" Minimum="1" Maximum="10" />
-                                    <StackPanel Spacing="10" IsVisible="{Binding $parent[UserControl].((vm:DeviceViewModel)DataContext).HasScrollFirmware}">
-                                        <Border Height="1" Background="#2A2A2A" Margin="0,4" />
-                                        <TextBlock Text="SCROLLING MODE" Foreground="#FFFFFF" FontSize="12" />
-                                        <ComboBox ItemsSource="{Binding WheelModes}" SelectedItem="{Binding WheelMode, Mode=TwoWay}"
-                                                  DisplayMemberBinding="{ReflectionBinding Label}" AutomationProperties.Name="Scrolling mode" />
-                                        <TextBlock Text="{Binding ReportedWheelMode, StringFormat='Current mode {0}'}"
-                                                   IsVisible="{Binding HasReportedWheelMode}"
-                                                   Foreground="#CCCCCC" FontSize="12" />
-                                        <StackPanel Orientation="Horizontal" Spacing="10">
-                                            <TextBlock Text="SCROLL ACCELERATION" Foreground="#FFFFFF" FontSize="12" VerticalAlignment="Center" />
-                                            <ToggleSwitch IsChecked="{Binding Acceleration}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
+                                    <controls:ValueSlider DataContext="{Binding ScrollWheel}" x:DataType="vm:ScrollWheelViewModel"
+                                                          Value="{Binding LinesPerNotch}" Minimum="1" Maximum="10" />
+                                    <Border IsVisible="{Binding HasScrollFirmware}">
+                                        <StackPanel Spacing="10" DataContext="{Binding ScrollWheel}" x:DataType="vm:ScrollWheelViewModel">
+                                            <Border Height="1" Background="#2A2A2A" Margin="0,4" />
+                                            <TextBlock Text="SCROLLING MODE" Foreground="#FFFFFF" FontSize="12" />
+                                            <ComboBox ItemsSource="{Binding WheelModes}" SelectedItem="{Binding WheelMode, Mode=TwoWay}"
+                                                      DisplayMemberBinding="{ReflectionBinding Label}" AutomationProperties.Name="Scrolling mode" />
+                                            <TextBlock Text="{Binding ReportedWheelMode, StringFormat='Current mode {0}'}"
+                                                       IsVisible="{Binding HasReportedWheelMode}"
+                                                       Foreground="#CCCCCC" FontSize="12" />
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <TextBlock Text="SCROLL ACCELERATION" Foreground="#FFFFFF" FontSize="12" VerticalAlignment="Center" />
+                                                <ToggleSwitch IsChecked="{Binding Acceleration}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
+                                            </StackPanel>
+                                            <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap" Text="Amplifies your scrolling speed when in Free Spinning mode." />
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <TextBlock Text="SMART-REEL" Foreground="#FFFFFF" FontSize="12" VerticalAlignment="Center" />
+                                                <ToggleSwitch IsChecked="{Binding SmartReel}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
+                                            </StackPanel>
+                                            <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap"
+                                                       Text="Automatically switches to Free-Spin as you quickly flick the scroll wheel, and back to Tactile when the wheel stops." />
                                         </StackPanel>
-                                        <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap" Text="Amplifies your scrolling speed when in Free Spinning mode." />
-                                        <StackPanel Orientation="Horizontal" Spacing="10">
-                                            <TextBlock Text="SMART-REEL" Foreground="#FFFFFF" FontSize="12" VerticalAlignment="Center" />
-                                            <ToggleSwitch IsChecked="{Binding SmartReel}" OnContent="" OffContent="" MinWidth="0" Margin="0,-4,0,0" />
-                                        </StackPanel>
-                                        <TextBlock Foreground="#CCCCCC" FontSize="12" TextWrapping="Wrap"
-                                                   Text="Automatically switches to Free-Spin as you quickly flick the scroll wheel, and back to Tactile when the wheel stops." />
-                                    </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </Border>
                             <Border Classes="card" Width="540" IsVisible="{Binding HasQuickRemapping}">
@@ -338,20 +348,20 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- The binding flyout, against the key list as in Synapse. -->
-                <ScrollViewer HorizontalAlignment="Left" VerticalAlignment="Top"
-                              MaxHeight="{Binding #CustomizeWorkArea.Bounds.Height}"
-                              IsVisible="{Binding Editor, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <Border HorizontalAlignment="Left" Width="420"
+                        IsVisible="{Binding Editor, Converter={x:Static ObjectConverters.IsNotNull}}">
                     <views:BindingFlyout DataContext="{Binding Editor}" />
-                </ScrollViewer>
+                </Border>
             </Panel>
         </Grid>
 
-        <views:DeviceLightingView Name="LightingPage" Grid.Row="3"
+        <views:DeviceLightingView Name="LightingPage" Grid.Row="4"
+                                  IsEnabled="{Binding HasSoftwareSettings}"
                                   IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=LIGHTING}" />
 
         <!-- PERFORMANCE -->
-        <ScrollViewer Grid.Row="3" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
+        <ScrollViewer Grid.Row="4" IsEnabled="{Binding HasSoftwareSettings}"
+                      IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=PERFORMANCE}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Performance}" x:DataType="vm:PerformanceViewModel">
                 <Border Classes="card" Width="620">
                     <StackPanel Spacing="12">
@@ -362,6 +372,19 @@
                             <ToggleSwitch IsChecked="{Binding StagesEnabled}" OnContent="" OffContent="" MinWidth="0" />
                             <Button Classes="flat" Content="＋" ToolTip.Tip="Add a stage" Command="{Binding AddStageCommand}" IsVisible="{Binding StagesEnabled}" />
                             <Button Classes="flat" Content="－" ToolTip.Tip="Remove the last stage" Command="{Binding RemoveStageCommand}" IsVisible="{Binding StagesEnabled}" />
+                        </StackPanel>
+                        <StackPanel Spacing="6" IsVisible="{Binding SupportsManagedDpiSteps}">
+                            <ToggleSwitch Name="ManagedDpiToggle" IsChecked="{Binding ManagedDpiSteps}" Content="Viper-managed DPI steps" />
+                            <TextBlock Classes="caption" Text="Requires Viper Relay to be running. DPI bindings and shortcuts take precedence." TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding ManagedDpiSteps}">
+                                <Button Name="AddManagedDpiStage" Content="Add step" Command="{Binding AddStageCommand}" />
+                                <Button Content="Remove last step" Command="{Binding RemoveStageCommand}" />
+                                <TextBlock VerticalAlignment="Center" Text="Startup step" />
+                                <NumericUpDown Value="{Binding StartupStep}" Minimum="1" Maximum="{Binding StageCount}" FormatString="0"
+                                               AutomationProperties.Name="Startup DPI step" />
+                            </StackPanel>
+                            <TextBlock Name="ManagedDpiStatus" Classes="caption" IsVisible="{Binding ManagedDpiSteps}" Text="{Binding ManagedDpiStatus}"
+                                       TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
                         <CheckBox Content="Enable X-Y sensitivity" IsChecked="{Binding SeparateXY}" />
                         <!-- The range once, above the stages, as Synapse shows it. -->
@@ -375,8 +398,8 @@
                         <ItemsControl ItemsSource="{Binding Stages}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:StageRow">
-                                    <Grid ColumnDefinitions="44,70,*" RowDefinitions="Auto,Auto" Margin="0,4">
-                                        <Button Classes="stage" Content="{Binding Number}" Classes.active="{Binding Active}" Click="ActivateStage" VerticalAlignment="Top" />
+                                    <Grid ColumnDefinitions="44,70,*" RowDefinitions="Auto,Auto" Margin="0,4" IsVisible="{Binding ShowStage}">
+                                        <Button Classes="stage" Content="{Binding Number}" Classes.active="{Binding DisplayActive}" Click="ActivateStage" VerticalAlignment="Top" />
                                         <NumericUpDown Grid.Column="1" Value="{Binding X}" Minimum="100" Increment="{Binding DpiStep}" FormatString="0" ShowButtonSpinner="False"
                                                        Maximum="{Binding DpiMax}" VerticalAlignment="Top" />
                                         <controls:ValueSlider Grid.Column="2" Value="{Binding X}" Minimum="100" Maximum="{Binding DpiMax}" Step="{Binding DpiStep}"
@@ -406,7 +429,8 @@
         </ScrollViewer>
 
         <!-- CALIBRATION -->
-        <ScrollViewer Grid.Row="3" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CALIBRATION}">
+        <ScrollViewer Grid.Row="4" IsEnabled="{Binding HasSoftwareSettings}"
+                      IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=CALIBRATION}">
             <StackPanel HorizontalAlignment="Center" Margin="20,8" Spacing="12" DataContext="{Binding Calibration}" x:DataType="vm:CalibrationViewModel">
                 <Border Background="#2A2A2A" Padding="20,14" Width="900">
                     <StackPanel Spacing="6">
@@ -431,15 +455,16 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Grid Grid.Row="3" IsVisible="{Binding IsOnboardPage}">
+        <Grid Grid.Row="4" IsVisible="{Binding IsOnboardPage}">
             <views:OnboardEditorView DataContext="{Binding Onboard}" />
         </Grid>
 
-        <views:DeviceHealthView Name="HealthPage" Grid.Row="3"
+        <views:DeviceHealthView Name="HealthPage" Grid.Row="4"
                                 IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=HEALTH}" />
 
         <!-- POWER -->
-        <ScrollViewer Grid.Row="3" IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">
+        <ScrollViewer Grid.Row="4" IsEnabled="{Binding HasSoftwareSettings}"
+                      IsVisible="{Binding SelectedPage, Converter={x:Static views:Converters.Equal}, ConverterParameter=POWER}">
             <WrapPanel HorizontalAlignment="Center" Margin="20,8" DataContext="{Binding Power}" x:DataType="vm:PowerViewModel">
                 <Border Classes="card" Width="440">
                     <StackPanel Spacing="12">

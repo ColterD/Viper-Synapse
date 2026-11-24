@@ -54,6 +54,25 @@ public sealed class DeviceSession : IDisposable
     readonly List<EvdevDevice> _nodes = [];
     readonly List<Thread> _threads = [];
     readonly Lock _engineGate = new();
+    static readonly TimeSpan TiltMirrorWindow = TimeSpan.FromMilliseconds(25);
+    readonly TimeProvider _time;
+    TiltRoute? _tiltLeft, _tiltRight;
+    ITimer? _tiltTimer;
+    string? _tiltWheelPath;
+
+    sealed class TiltRoute(ushort source)
+    {
+        public ushort Source { get; } = source;
+        public Queue<DetentBatch> Pending { get; } = [];
+        public Queue<long> Buttons { get; } = [];
+        public int Remainder;
+    }
+
+    sealed class DetentBatch(long at, long count)
+    {
+        public long At { get; } = at;
+        public long Count = count;
+    }
     // Composite devices may advertise one Linux key code on several interfaces.
     readonly Dictionary<ushort, HashSet<string>> _keyNodes = [];
     IDisposable? _macroReader;
@@ -74,6 +93,29 @@ public sealed class DeviceSession : IDisposable
             ReleaseNativeAliases(LegacyRemapControls.IsMacroSource);
             Engine.Sync();
             (_macroReader, _macroMode) = (reader, mode);
+        }
+    }
+
+    internal void DetachNativeMacroKeys()
+    {
+        IDisposable? reader = null, mode = null;
+        try
+        {
+            lock (_engineGate)
+            {
+                (reader, mode) = (_macroReader, _macroMode);
+                (_macroReader, _macroMode) = (null, null);
+                if (reader != null)
+                {
+                    ReleaseNativeAliases(LegacyRemapControls.IsMacroSource);
+                    Engine.Sync();
+                }
+            }
+        }
+        finally
+        {
+            try { reader?.Dispose(); }
+            finally { mode?.Dispose(); }
         }
     }
 
@@ -138,9 +180,10 @@ public sealed class DeviceSession : IDisposable
     /// <summary>Raised on a reader thread when a node goes away (unplugged) or fails.</summary>
     public event Action<string, Exception>? NodeLost;
 
-    internal DeviceSession(RemapEngine engine, ThumbstickMode stick)
+    internal DeviceSession(RemapEngine engine, ThumbstickMode stick, TimeProvider? time = null)
     {
         Engine = engine;
+        _time = time ?? TimeProvider.System;
         _stick = new StickDirections(stick);
     }
 
@@ -205,6 +248,8 @@ public sealed class DeviceSession : IDisposable
     {
         lock (_engineGate)
         {
+            _tiltLeft = _tiltRight = null;
+            _tiltTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             Exception? failure = null;
             foreach (var (source, _) in _stick.Release())
             {
@@ -325,12 +370,17 @@ public sealed class DeviceSession : IDisposable
         switch (e.Type)
         {
             case EventTypes.Key when (_macroReader == null || !LegacyRemapControls.IsMacroSource(e.Code)) &&
-                (!HasNativeNagaTilt || !LegacyRemapControls.IsNagaTiltSource(e.Code)) &&
+                (!LegacyRemapControls.IsNagaTiltSource(e.Code) || !HasNativeNagaTilt &&
+                    (!Engine.NagaTiltReportsHorizontalWheel || Engine.HasEvdevNagaTilt(e.Code))) &&
                 (!HasNativeNagaDpi || !LegacyRemapControls.IsNagaDpiSource(e.Code)):
+                if (e.Value == 1 && !_keyNodes.ContainsKey(e.Code) && LegacyRemapControls.IsNagaTiltSource(e.Code) &&
+                    !HasNativeNagaTilt && Engine.NagaTiltReportsHorizontalWheel && Engine.HasEvdevNagaTilt(e.Code) && Engine.HasNagaTiltAction(e.Code))
+                    ObserveTiltButton(e.Code);
                 DispatchKey(nodePath, e.Code, e.Value);
                 break;
             case EventTypes.Rel when e.Code is RelativeAxes.Wheel or RelativeAxes.HWheel or RelativeAxes.WheelHiRes or RelativeAxes.HWheelHiRes:
-                Engine.Wheel(e.Code, e.Value);
+                if (!RouteTiltWheel(nodePath, e.Code, e.Value))
+                    Engine.Wheel(e.Code, e.Value);
                 break;
             case EventTypes.Rel:
                 Engine.Relative(e.Code, e.Value);
@@ -338,6 +388,122 @@ public sealed class DeviceSession : IDisposable
             case EventTypes.Syn when e.Code == EventTypes.SynReport:
                 Engine.Sync();
                 break;
+        }
+    }
+
+    TiltRoute Tilt(ushort source) => source == LegacyRemapControls.NagaTiltLeft
+        ? _tiltLeft ??= new(source) : _tiltRight ??= new(source);
+
+    bool RouteTiltWheel(string path, ushort axis, int value)
+    {
+        if (HasNativeNagaTilt || !Engine.NagaTiltReportsHorizontalWheel || value == 0 ||
+            axis is not (RelativeAxes.HWheel or RelativeAxes.HWheelHiRes))
+            return false;
+        ushort source = value < 0 ? LegacyRemapControls.NagaTiltLeft : LegacyRemapControls.NagaTiltRight;
+        if (!Engine.HasNagaTiltAction(source))
+            return false;
+        // The standard event owns the detent when both resolutions are exposed.
+        if ((axis == RelativeAxes.HWheelHiRes) != Engine.NagaHorizontalHighResOnly)
+            return true;
+
+        var route = Tilt(source);
+        long count = Math.Abs((long)value);
+        if (Engine.NagaHorizontalHighResOnly)
+        {
+            count += route.Remainder;
+            route.Remainder = (int)(count % 120);
+            count /= 120;
+        }
+        if (count == 0)
+            return true;
+        if (!Engine.HasEvdevNagaTilt(source))
+        {
+            EmitTiltDetents(source, count);
+            return true;
+        }
+
+        long now = _time.GetTimestamp();
+        DrainTilt(route, now);
+        while (count > 0 && route.Buttons.TryDequeue(out _))
+            count--;
+        if (count > 0 && !_keyNodes.ContainsKey(source))
+        {
+            route.Pending.Enqueue(new(now, count));
+            _tiltWheelPath = path;
+            ScheduleTiltTimer(now);
+        }
+        return true;
+    }
+
+    void ObserveTiltButton(ushort source)
+    {
+        var route = Tilt(source);
+        long now = _time.GetTimestamp();
+        DrainTilt(route, now);
+        if (route.Pending.TryPeek(out var wheel))
+        {
+            if (--wheel.Count == 0)
+                route.Pending.Dequeue();
+        }
+        else
+            route.Buttons.Enqueue(now);
+    }
+
+    void DrainTilt(TiltRoute? route, long now)
+    {
+        if (route == null)
+            return;
+        while (route.Buttons.TryPeek(out long button) && _time.GetElapsedTime(button, now) >= TiltMirrorWindow)
+            route.Buttons.Dequeue();
+        while (route.Pending.TryPeek(out var wheel) && _time.GetElapsedTime(wheel.At, now) >= TiltMirrorWindow)
+        {
+            route.Pending.Dequeue();
+            EmitTiltDetents(route.Source, wheel.Count);
+        }
+    }
+
+    void EmitTiltDetents(ushort source, long count)
+    {
+        for (long i = 0; i < count; i++)
+            Engine.NagaTiltDetent(source);
+    }
+
+    void ScheduleTiltTimer(long now)
+    {
+        long? next = _tiltLeft?.Pending.TryPeek(out var left) == true ? left.At : null;
+        if (_tiltRight?.Pending.TryPeek(out var right) == true)
+            next = next is long at ? Math.Min(at, right.At) : right.At;
+        if (next == null)
+            return;
+        _tiltTimer ??= _time.CreateTimer(_ => FinishTiltWindow(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        var remaining = TiltMirrorWindow - _time.GetElapsedTime(next.Value, now);
+        _tiltTimer.Change(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+    }
+
+    void FinishTiltWindow()
+    {
+        string? path = null;
+        try
+        {
+            lock (_engineGate)
+            {
+                if (_stopping || _tiltWheelPath == null)
+                    return;
+                path = _tiltWheelPath;
+                long now = _time.GetTimestamp();
+                DrainTilt(_tiltLeft, now);
+                DrainTilt(_tiltRight, now);
+                Engine.Sync();
+                ScheduleTiltTimer(now);
+            }
+        }
+        // Timer callbacks have no caller to receive an input failure.
+#pragma warning disable CA1031
+        catch (Exception error)
+#pragma warning restore CA1031
+        {
+            if (!_stopping && path != null)
+                NodeLost?.Invoke(path, error);
         }
     }
 
@@ -371,7 +537,10 @@ public sealed class DeviceSession : IDisposable
         try
         {
             lock (_engineGate)
+            {
+                _tiltTimer?.Dispose();
                 Engine.Reset();
+            }
         }
         catch (Exception error) { failure = error; }
         try { _macroReader?.Dispose(); }

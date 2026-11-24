@@ -12,7 +12,9 @@ namespace ViperSynapse.App.Services;
 /// <summary>The device's own sensitivity, polling rate and battery.</summary>
 public sealed record DeviceState(IReadOnlyList<ViperSynapse.Core.Lighting.DpiStage>? Stages, int ActiveStage, int PollingRate, int? BatteryPercent, bool? Charging, int LiftOffLevel = -1,
     int SleepSeconds = 0, int LowBatteryPercent = 0, bool? ScrollAcceleration = null, bool? SmartReel = null,
-    byte? OnboardProfile = null, ViperSynapse.Core.Lighting.ScrollWheelMode? WheelMode = null);
+    byte? OnboardProfile = null, ViperSynapse.Core.Lighting.ScrollWheelMode? WheelMode = null,
+    int? ManagedDpiStep = null, string? ManagedDpiProblem = null,
+    ViperSynapse.Core.Lighting.DpiStage? LastConfirmedManagedDpi = null);
 
 public sealed record DeviceInfo(
     string Key, string ProductId, string Name, string Type, string Port, bool Known, bool Verified,
@@ -20,7 +22,8 @@ public sealed record DeviceInfo(
     IReadOnlyList<ushort>? InputControls = null, string? InputControlsStatus = null, string? Connection = null,
     byte? OnboardProfile = null, bool NativeMacroKeys = false,
     string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null,
-    bool? VirtualOutputReady = null);
+    bool? VirtualOutputReady = null, long ManagedDpiRevision = 0, bool ManagedDpiListening = false, bool NagaTiltDetentsOnly = false,
+    bool NagaTiltUsesEvdev = false);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]
@@ -194,6 +197,31 @@ public sealed class DaemonClient : IAsyncDisposable
         string json = await connection.CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadString(), null)
             .ConfigureAwait(false);
         return JsonSerializer.Deserialize(json, ClientJson.Default.DeviceState);
+    }
+
+    internal async Task<DeviceState?> SelectManagedDpiStepAsync(DeviceInfo device, Guid profile, int step, ViperSynapse.Core.Lighting.DpiStage expected)
+    {
+        var connection = Connection;
+        var message = BuildManagedDpiSelection(connection, device, profile, step, expected);
+        string json = await connection.CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadString(), null)
+            .ConfigureAwait(false);
+        return JsonSerializer.Deserialize(json, ClientJson.Default.DeviceState);
+    }
+
+    static MessageBuffer BuildManagedDpiSelection(DBusConnection connection, DeviceInfo device, Guid profile, int step,
+        ViperSynapse.Core.Lighting.DpiStage expected)
+    {
+        using var writer = connection.GetMessageWriter();
+        writer.WriteMethodCallHeader(destination: BusName, path: ObjectPath, @interface: Interface, member: "SelectManagedDpiStep", signature: "sssssiii");
+        writer.WriteString(device.Key);
+        writer.WriteString(device.Port);
+        writer.WriteString(device.ProductId);
+        writer.WriteString(device.Serial ?? "");
+        writer.WriteString(profile.ToString("D"));
+        writer.WriteInt32(step);
+        writer.WriteInt32(expected.X);
+        writer.WriteInt32(expected.Y);
+        return writer.CreateMessage();
     }
 
     public async Task<OnboardResult> ManageOnboardAsync(OnboardRequest request) =>

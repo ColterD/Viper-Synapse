@@ -3,113 +3,127 @@
              xmlns:vm="using:ViperSynapse.App.ViewModels"
              xmlns:views="using:ViperSynapse.App.Views"
              x:Class="ViperSynapse.App.Views.BindingFlyout"
-             x:DataType="vm:BindingEditorViewModel"
-             Width="330">
+             x:DataType="vm:BindingEditorViewModel">
     <Border Background="{StaticResource PanelBrush}" BorderBrush="#3A3A3A" BorderThickness="1">
-        <DockPanel>
-            <!-- Title bar: the key, and a close cross. -->
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Height="36" Background="#1A1A1A">
-                <TextBlock Text="{Binding Title}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#DDDDDD" />
-                <Button Grid.Column="1" Classes="flat" Content="✕" Command="{Binding CancelCommand}" IsEnabled="{Binding !IsSaving}" />
-            </Grid>
-            <StackPanel DockPanel.Dock="Top" Margin="16,8" Spacing="4" IsVisible="{Binding HasTargetStatus}">
+        <Grid RowDefinitions="Auto,*,Auto">
+            <StackPanel Spacing="6" Margin="12,8">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="{Binding Title}" Classes="deviceSectionTitle" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Classes="flat" Content="✕" Command="{Binding CancelCommand}"
+                            IsEnabled="{Binding !IsSaving}" ToolTip.Tip="Close binding editor"
+                            AutomationProperties.Name="Close binding editor" />
+                </Grid>
                 <TextBlock Text="{Binding Target}" TextWrapping="Wrap" Classes="caption"
                            IsVisible="{Binding Target, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <ComboBox Name="AssignmentType" ItemsSource="{x:Static vm:BindingEditorViewModel.Functions}"
+                          SelectedItem="{Binding SelectedFunction}" HorizontalAlignment="Stretch"
+                          IsEnabled="{Binding !IsSaving}" AutomationProperties.Name="Assignment type">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:FunctionEntry">
+                            <TextBlock Text="{Binding Title}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Text="{Binding CapturedText, StringFormat='Key · {0}'}" Classes="caption"
+                           IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Keyboard}"
+                           AutomationProperties.LiveSetting="Polite" />
+            </StackPanel>
+            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" IsEnabled="{Binding !IsSaving}">
+                <StackPanel Margin="12,8" Spacing="10">
+                <TextBlock IsVisible="{Binding ShowNagaDpiNotice}" TextWrapping="Wrap" Foreground="#AAAAAA"
+                           Text="The mouse may still change its DPI stage when this button is remapped or disabled in Viper." />
+
+                <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Default}"
+                           Text="The key keeps its default behavior." TextWrapping="Wrap" Foreground="#AAAAAA" />
+
+                <!-- Keyboard function: press the key to send, tick the modifiers to hold with it. -->
+                <StackPanel Spacing="10" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Keyboard}">
+                    <WrapPanel ItemSpacing="8" LineSpacing="6">
+                        <Button Name="KeyCapture" Content="Capture key" Click="ArmCapture"
+                                AutomationProperties.HelpText="Capture one key. Escape cancels capture. Use Choose key for Tab or Escape." />
+                        <Button Name="ChooseKey" Content="Choose key">
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuItem Header="Tab" Click="ChooseTab" />
+                                    <MenuItem Header="Escape" Click="ChooseEscape" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </WrapPanel>
+                    <TextBlock Name="CaptureInstructions" Classes="caption" IsVisible="False" TextWrapping="Wrap"
+                               Text="Press a key. Escape cancels capture." AutomationProperties.LiveSetting="Polite" />
+                    <WrapPanel>
+                        <CheckBox Content="Ctrl" IsChecked="{Binding Ctrl}" Margin="0,0,10,0" />
+                        <CheckBox Content="Shift" IsChecked="{Binding Shift}" Margin="0,0,10,0" />
+                        <CheckBox Content="Alt" IsChecked="{Binding Alt}" Margin="0,0,10,0" />
+                        <CheckBox Content="Super" IsChecked="{Binding Super}" />
+                    </WrapPanel>
+                </StackPanel>
+
+                <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Mouse}"
+                          ItemsSource="{x:Static vm:BindingEditorViewModel.MouseFunctions}" SelectedItem="{Binding SelectedMouse}" HorizontalAlignment="Stretch" />
+
+                <!-- Turbo, shared by keyboard and mouse functions. -->
+                <StackPanel Spacing="6" IsVisible="{Binding Kind, Converter={x:Static views:Converters.IsTurbo}}">
+                    <CheckBox Content="Enable Turbo" IsChecked="{Binding Turbo}" />
+                    <StackPanel Spacing="4" IsEnabled="{Binding Turbo}">
+                        <TextBlock Classes="caption" Text="SPEED (PRESS/SEC)" />
+                        <Grid ColumnDefinitions="*,40">
+                            <Slider Minimum="1" Maximum="20" IsSnapToTickEnabled="True" TickFrequency="1" Value="{Binding TurboRate}" />
+                            <TextBlock Grid.Column="1" Text="{Binding TurboRate}" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Spacing="8" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Macro}">
+                    <TextBlock IsVisible="{Binding !HasMacros}" Foreground="#AAAAAA" TextWrapping="Wrap"
+                               Text="No macros yet. Record one in the MACROS tab." />
+                    <ComboBox ItemsSource="{Binding MacroChoices}" SelectedItem="{Binding SelectedMacro}" HorizontalAlignment="Stretch" IsVisible="{Binding HasMacros}" />
+                    <TextBlock Classes="caption" Text="PLAYBACK OPTIONS" />
+                    <ComboBox ItemsSource="{x:Static vm:BindingEditorViewModel.Playbacks}" SelectedItem="{Binding SelectedPlayback}" HorizontalAlignment="Stretch" />
+                    <NumericUpDown IsVisible="{Binding TimesVisible}" Minimum="2" Maximum="1000" Value="{Binding PlayTimes}" FormatString="0" />
+                </StackPanel>
+
+                <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Hypershift}" TextWrapping="Wrap" Foreground="#AAAAAA"
+                           Text="Hold this key to switch every key of the device to its Hypershift functions." />
+
+                <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=SwitchProfile}"
+                          ItemsSource="{Binding ProfileChoices}" SelectedItem="{Binding SelectedProfileChoice}" HorizontalAlignment="Stretch" />
+                <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=SwitchKeymap}"
+                          ItemsSource="{Binding KeymapChoices}" SelectedItem="{Binding SelectedKeymapChoice}" HorizontalAlignment="Stretch" />
+
+                <StackPanel Spacing="6" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Launch}">
+                    <TextBox Text="{Binding Command}" PlaceholderText="Program and arguments, e.g. firefox --new-window" />
+                    <Button Classes="cancel" Content="BROWSE" Click="Browse" HorizontalAlignment="Left" />
+                </StackPanel>
+
+                <StackPanel Spacing="8" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Gamepad}">
+                    <ComboBox ItemsSource="{x:Static vm:BindingEditorViewModel.GamepadControls}" SelectedItem="{Binding SelectedGamepad}" HorizontalAlignment="Stretch" />
+                    <TextBlock Text="The key works this control of a virtual Xbox 360 pad, for games that take a controller." Foreground="#AAAAAA" FontSize="11" TextWrapping="Wrap" />
+                </StackPanel>
+
+                <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Multimedia}"
+                          ItemsSource="{x:Static vm:BindingEditorViewModel.MediaKeys}" SelectedItem="{Binding SelectedMedia}" HorizontalAlignment="Stretch" />
+
+                <TextBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Text}"
+                         Text="{Binding Text}" AcceptsReturn="True" Height="80" TextWrapping="Wrap" PlaceholderText="Text to type" />
+
+                <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Disable}"
+                           Text="The key does nothing." Foreground="#AAAAAA" />
+
+                </StackPanel>
+            </ScrollViewer>
+            <StackPanel Grid.Row="2" Spacing="6" Margin="12,8">
                 <TextBlock Text="{Binding Conflict}" TextWrapping="Wrap" Classes="deviceStatusText statusUnavailable"
                            IsVisible="{Binding Conflict, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" AutomationProperties.LiveSetting="Polite" />
                 <TextBlock Text="{Binding SaveError}" TextWrapping="Wrap" Classes="deviceStatusText statusUnavailable"
                            IsVisible="{Binding SaveError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" AutomationProperties.LiveSetting="Polite" />
-                <TextBlock Text="Saving binding…" Classes="caption" IsVisible="{Binding IsSaving}" AutomationProperties.LiveSetting="Polite" />
-            </StackPanel>
-            <Grid ColumnDefinitions="40,*" IsEnabled="{Binding !IsSaving}">
-                <ListBox Classes="rail" ItemsSource="{x:Static vm:BindingEditorViewModel.Functions}" SelectedItem="{Binding SelectedFunction}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:FunctionEntry">
-                            <TextBlock Text="{Binding Glyph}" ToolTip.Tip="{Binding Title}" HorizontalAlignment="Center" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-
-                <StackPanel Grid.Column="1" Margin="16,14,16,16" Spacing="10">
-                    <TextBlock Classes="heading" Text="{Binding SelectedFunction.Title}" />
-
-                    <TextBlock IsVisible="{Binding ShowNagaDpiNotice}" TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="The mouse may still change its DPI stage when this button is remapped or disabled in Viper." />
-
-                    <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Default}"
-                               Text="The key keeps its default behavior." TextWrapping="Wrap" Foreground="#AAAAAA" />
-
-                    <!-- Keyboard function: press the key to send, tick the modifiers to hold with it. -->
-                    <StackPanel Spacing="10" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Keyboard}">
-                        <Border Name="KeyCapture" Focusable="True" Background="#1E1E1E" BorderBrush="#4A4A4A" BorderThickness="1" Height="34"
-                                Cursor="Hand">
-                            <TextBlock Text="{Binding CapturedText}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}" />
-                        </Border>
-                        <WrapPanel>
-                            <CheckBox Content="Ctrl" IsChecked="{Binding Ctrl}" Margin="0,0,10,0" />
-                            <CheckBox Content="Shift" IsChecked="{Binding Shift}" Margin="0,0,10,0" />
-                            <CheckBox Content="Alt" IsChecked="{Binding Alt}" Margin="0,0,10,0" />
-                            <CheckBox Content="Super" IsChecked="{Binding Super}" />
-                        </WrapPanel>
-                    </StackPanel>
-
-                    <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Mouse}"
-                              ItemsSource="{x:Static vm:BindingEditorViewModel.MouseFunctions}" SelectedItem="{Binding SelectedMouse}" HorizontalAlignment="Stretch" />
-
-                    <!-- Turbo, shared by keyboard and mouse functions. -->
-                    <StackPanel Spacing="6" IsVisible="{Binding Kind, Converter={x:Static views:Converters.IsTurbo}}">
-                        <CheckBox Content="Enable Turbo" IsChecked="{Binding Turbo}" />
-                        <StackPanel Spacing="4" IsEnabled="{Binding Turbo}">
-                            <TextBlock Classes="caption" Text="SPEED (PRESS/SEC)" />
-                            <Grid ColumnDefinitions="*,40">
-                                <Slider Minimum="1" Maximum="20" IsSnapToTickEnabled="True" TickFrequency="1" Value="{Binding TurboRate}" />
-                                <TextBlock Grid.Column="1" Text="{Binding TurboRate}" VerticalAlignment="Center" HorizontalAlignment="Right" />
-                            </Grid>
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel Spacing="8" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Macro}">
-                        <TextBlock IsVisible="{Binding !HasMacros}" Foreground="#AAAAAA" TextWrapping="Wrap"
-                                   Text="No macros yet. Record one in the MACROS tab." />
-                        <ComboBox ItemsSource="{Binding MacroChoices}" SelectedItem="{Binding SelectedMacro}" HorizontalAlignment="Stretch" IsVisible="{Binding HasMacros}" />
-                        <TextBlock Classes="caption" Text="PLAYBACK OPTIONS" />
-                        <ComboBox ItemsSource="{x:Static vm:BindingEditorViewModel.Playbacks}" SelectedItem="{Binding SelectedPlayback}" HorizontalAlignment="Stretch" />
-                        <NumericUpDown IsVisible="{Binding TimesVisible}" Minimum="2" Maximum="1000" Value="{Binding PlayTimes}" FormatString="0" />
-                    </StackPanel>
-
-                    <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Hypershift}" TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="Hold this key to switch every key of the device to its Hypershift functions." />
-
-                    <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=SwitchProfile}"
-                              ItemsSource="{Binding ProfileChoices}" SelectedItem="{Binding SelectedProfileChoice}" HorizontalAlignment="Stretch" />
-                    <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=SwitchKeymap}"
-                              ItemsSource="{Binding KeymapChoices}" SelectedItem="{Binding SelectedKeymapChoice}" HorizontalAlignment="Stretch" />
-
-                    <StackPanel Spacing="6" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Launch}">
-                        <TextBox Text="{Binding Command}" PlaceholderText="Program and arguments, e.g. firefox --new-window" />
-                        <Button Classes="cancel" Content="BROWSE" Click="Browse" HorizontalAlignment="Left" />
-                    </StackPanel>
-
-                    <StackPanel Spacing="8" IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Gamepad}">
-                        <ComboBox ItemsSource="{x:Static vm:BindingEditorViewModel.GamepadControls}" SelectedItem="{Binding SelectedGamepad}" HorizontalAlignment="Stretch" />
-                        <TextBlock Text="The key works this control of a virtual Xbox 360 pad, for games that take a controller." Foreground="#AAAAAA" FontSize="11" TextWrapping="Wrap" />
-                    </StackPanel>
-
-                    <ComboBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Multimedia}"
-                              ItemsSource="{x:Static vm:BindingEditorViewModel.MediaKeys}" SelectedItem="{Binding SelectedMedia}" HorizontalAlignment="Stretch" />
-
-                    <TextBox IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Text}"
-                             Text="{Binding Text}" AcceptsReturn="True" Height="80" TextWrapping="Wrap" PlaceholderText="Text to type" />
-
-                    <TextBlock IsVisible="{Binding Kind, Converter={x:Static views:Converters.Is}, ConverterParameter=Disable}"
-                               Text="The key does nothing." Foreground="#AAAAAA" />
-
-                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
-                        <Button Classes="cancel" Content="CANCEL" Command="{Binding CancelCommand}" IsEnabled="{Binding !IsSaving}" />
-                        <Button Classes="save" Content="SAVE" Command="{Binding SaveCommand}" IsEnabled="{Binding CanSave}" />
-                    </StackPanel>
+                <TextBlock Text="Saving…" Classes="caption" IsVisible="{Binding IsSaving}" AutomationProperties.LiveSetting="Polite" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button Name="CancelBinding" Classes="cancel" Content="Cancel" Command="{Binding CancelCommand}" IsEnabled="{Binding !IsSaving}" />
+                    <Button Name="SaveBinding" Classes="save" Content="{Binding SaveActionLabel}" Command="{Binding SaveCommand}" IsEnabled="{Binding CanSave}" />
                 </StackPanel>
-            </Grid>
-        </DockPanel>
+            </StackPanel>
+        </Grid>
     </Border>
 </UserControl>

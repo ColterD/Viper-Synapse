@@ -6,6 +6,7 @@ using ViperSynapse.Core.Bindings;
 using ViperSynapse.Core.Devices;
 using ViperSynapse.Core.Engine;
 using ViperSynapse.Core.Input;
+using ViperSynapse.Core.Lighting;
 using ViperSynapse.Core.Protocol;
 using ViperSynapse.Hardware;
 using ViperSynapse.Hardware.Linux;
@@ -32,7 +33,8 @@ public sealed record DeviceInfo(
     string? Connection = null,
     byte? OnboardProfile = null, bool NativeMacroKeys = false,
     string? Transport = null, bool? ControlReady = null, string? ControlIssue = null, string? InputIssue = null,
-    bool? VirtualOutputReady = null);
+    bool? VirtualOutputReady = null, long ManagedDpiRevision = 0, bool ManagedDpiListening = false, bool NagaTiltDetentsOnly = false,
+    bool NagaTiltUsesEvdev = false);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<DeviceInfo>))]
@@ -79,6 +81,7 @@ public sealed class DeviceManager : IDisposable
         NagaChromaButtons.Open;
     internal Func<IReadOnlyList<string>, Action<double, double>, IDisposable?> OpenStickMonitor { get; init; } = OpenAnalogStick;
     internal int StickWatchMilliseconds { get; init; } = 15_000;
+    internal TimeProvider InputTimeProvider { get; init; } = TimeProvider.System;
 
     public event Action? DevicesChanged;
     public event Action<string>? SettingsChanged;
@@ -155,6 +158,8 @@ public sealed class DeviceManager : IDisposable
         }
     }
 
+    sealed record NagaDpiContext(RemapEngine Engine, DeviceControl Control, Guid Profile, PerformanceSettings Performance);
+
     sealed class Connected(string port, ushort productId, string name)
     {
         public string Port { get; } = port;
@@ -183,19 +188,30 @@ public sealed class DeviceManager : IDisposable
         public bool Suppressed { get; set; }
         public List<string> InputNodes { get; set; } = [];
         public IReadOnlyList<ushort> EvdevControls { get; set; } = [];
+        public bool HorizontalHighResOnly { get; set; }
         public string? NativeMacroPath { get; set; }
+        public string? NativeMacroProblem { get; set; }
         public IReadOnlyList<NagaReportNode> NativeNagaNodes { get; set; } = [];
+        public bool NagaHasHorizontalWheel => Bus == HidrawNode.UsbBus && ProductId == LegacyRemapControls.NagaChroma &&
+            EvdevControls.Contains(SourceKeys.WheelLeft) && EvdevControls.Contains(SourceKeys.WheelRight);
+        public Lock DpiQueueGate { get; } = new();
+        public Task DpiQueue { get; set; } = Task.CompletedTask;
+        public NagaDpiContext? DpiContext { get; set; }
+        public long ManagedDpiRevision { get; set; }
         public bool CanReadNativeMacros => NativeMacroPath != null && Control != null && InputControlsStatus == "available";
         public bool CanReadNativeNagaTilt => NativeNagaNodes.Count > 0 && InputControlsStatus == "available";
         public bool CanReadNativeNagaDpi => CanReadNativeNagaTilt && NativeNagaNodes.Any(node => node.Kind == NagaReportKind.Dpi);
+        public bool CanReadNagaDpi => Bus == HidrawNode.UsbBus && ProductId == LegacyRemapControls.NagaChroma &&
+            InputControlsStatus == "available" && (CanReadNativeNagaDpi ||
+                EvdevControls.Contains(LegacyRemapControls.NagaDpiUp) && EvdevControls.Contains(LegacyRemapControls.NagaDpiDown));
         public IReadOnlyList<ushort> InputControls
         {
             get
             {
-                if (CanReadNativeMacros)
+                if (CanReadNativeMacros && NativeMacroProblem == null)
                     return EvdevControls.Union(Enumerable.Range(LegacyRemapControls.FirstMacroSource, 5)
                         .Select(source => (ushort)source)).Order().ToArray();
-                if (!CanReadNativeNagaTilt)
+                if (!CanReadNativeNagaTilt && !NagaHasHorizontalWheel)
                     return EvdevControls;
                 IEnumerable<ushort> controls = EvdevControls.Union([LegacyRemapControls.NagaTiltLeft, LegacyRemapControls.NagaTiltRight]);
                 if (CanReadNativeNagaDpi)
@@ -236,7 +252,7 @@ public sealed class DeviceManager : IDisposable
         {
             get
             {
-                var problems = new[] { Problem, ControlProblem, Control?.SoftwareLightingProblem, ButtonsProblem, InputProblem, CleanupProblem }
+                var problems = new[] { Problem, ControlProblem, Control?.SoftwareLightingProblem, ButtonsProblem, InputProblem, NativeMacroProblem, CleanupProblem }
                     .Where(p => p != null).ToArray();
                 return problems.Length == 0 ? null : string.Join(" ", problems);
             }
@@ -278,12 +294,17 @@ public sealed class DeviceManager : IDisposable
         d.InputControlsStatus,
         d.Connection,
         d.OnboardProfile,
-        d.CanReadNativeMacros,
+        d.CanReadNativeMacros && d.NativeMacroProblem == null,
         d.Bus switch { HidrawNode.UsbBus => "usb", HidrawNode.BluetoothBus => "bluetooth", _ => null },
         d.Control != null,
         d.Control?.SoftwareLightingProblem ?? d.Problem,
-        _outputIssue ?? d.InputProblem,
-        _output != null);
+        _outputIssue ?? d.InputProblem ?? d.NativeMacroProblem,
+        _output != null,
+        d.ManagedDpiRevision,
+        !d.InputFailed && d.Session != null && d.DpiContext is { } dpi && d.Engine == dpi.Engine && d.Control == dpi.Control,
+        d.NagaHasHorizontalWheel && !d.CanReadNativeNagaTilt && (!d.EvdevControls.Contains(LegacyRemapControls.NagaTiltLeft) ||
+            !d.EvdevControls.Contains(LegacyRemapControls.NagaTiltRight)),
+        d.NagaHasHorizontalWheel && !d.CanReadNativeNagaTilt);
 
     /// <summary>Looks at what is plugged in now: starts new devices, drops the ones that went away.</summary>
     public void Refresh() => Refresh(forceControlRetry: false);
@@ -294,7 +315,7 @@ public sealed class DeviceManager : IDisposable
         {
             if (!_disposed)
                 RefreshCore(HidrawNode.Enumerate(), InputNode.Enumerate(), node => RazerProbe.HasControlReport(node),
-                    OpenControl, InputControlDiscovery.Read, forceControlRetry);
+                    OpenControl, null, forceControlRetry);
         }
     }
 
@@ -305,7 +326,7 @@ public sealed class DeviceManager : IDisposable
         lock (_refreshGate)
         {
             if (!_disposed)
-                RefreshCore(hidraw, inputs, hasControlReport, open, readControls ?? InputControlDiscovery.Read, forceControlRetry);
+                RefreshCore(hidraw, inputs, hasControlReport, open, readControls, forceControlRetry);
         }
     }
 
@@ -342,7 +363,7 @@ public sealed class DeviceManager : IDisposable
 
     void RefreshCore(IEnumerable<HidrawNode> rawNodes, IEnumerable<InputNode> inputNodes,
         Func<HidrawNode, bool> hasControlReport, Func<string, RazerTransport> open,
-        Func<IEnumerable<string>, DiscoveredControls> readControls, bool forceControlRetry)
+        Func<IEnumerable<string>, DiscoveredControls>? readControls, bool forceControlRetry)
     {
         var hidraw = rawNodes.Where(n => n.VendorId == RazerVendor && n.PortPath.Length > 0 && Real(n.PortPath)).ToList();
         // Virtual devices (ours included) have no physical port; only real hardware is a device.
@@ -408,6 +429,7 @@ public sealed class DeviceManager : IDisposable
                     // The device's nodes changed under a running session (a re-plug): start it again.
                     StopSession(device);
                     device.InputFailed = false;
+                    device.NativeMacroProblem = null;
                     affectedModels.Add(device.Key);
                     changed = true;
                 }
@@ -422,18 +444,21 @@ public sealed class DeviceManager : IDisposable
                 .Select(d => (d, d.InputNodes.ToArray())).ToList();
         foreach (var (device, nodes) in discover)
         {
-            var found = readControls(nodes);
+            var found = readControls?.Invoke(nodes) ?? InputControlDiscovery.Read(nodes,
+                device.Bus == HidrawNode.UsbBus ? device.ProductId : null);
             lock (_gate)
             {
                 if (!_devices.TryGetValue(device.Port, out var current) || current != device || !nodes.SequenceEqual(device.InputNodes))
                     continue;
-                if (device.InputControlsStatus != found.Status || !device.EvdevControls.SequenceEqual(found.Controls))
+                if (device.InputControlsStatus != found.Status || device.HorizontalHighResOnly != found.HorizontalHighResOnly ||
+                    !device.EvdevControls.SequenceEqual(found.Controls))
                 {
                     // A permission recovery is a meaningful reason to allow a retry.
                     if (found.Status == "available" && device.InputControlsStatus != "available")
                         device.InputFailed = false;
                     device.EvdevControls = found.Controls;
                     device.InputControlsStatus = found.Status;
+                    device.HorizontalHighResOnly = found.HorizontalHighResOnly;
                     affectedModels.Add(device.Key);
                     changed = true;
                 }
@@ -447,6 +472,15 @@ public sealed class DeviceManager : IDisposable
             probes = _devices.Values.Where(d => !d.BluetoothBasiliskId).ToList();
         foreach (var device in probes)
         {
+            lock (_gate)
+            {
+                if (forceControlRetry && device.NativeMacroProblem != null)
+                {
+                    device.NativeMacroProblem = null;
+                    affectedModels.Add(device.Key);
+                    changed = true;
+                }
+            }
             if (ReconcileControl(device, hidraw, hasControlReport, open, adopt, forceControlRetry))
             {
                 affectedModels.Add(device.Key);
@@ -524,6 +558,7 @@ public sealed class DeviceManager : IDisposable
             {
                 StopSession(device);
                 device.InputFailed = false;
+                device.NativeMacroProblem = null;
             }
             retired = device.Control;
             device.Control = null;
@@ -903,7 +938,14 @@ public sealed class DeviceManager : IDisposable
                 if (refreshing && device.InputFailed)
                     continue;
                 if (!refreshing)
+                {
                     device.InputFailed = false;
+                    if (device.NativeMacroProblem != null)
+                    {
+                        device.NativeMacroProblem = null;
+                        changed = true;
+                    }
+                }
                 // A thumbstick in 4-way or 8-way mode types its directions even with nothing bound.
                 var stick = device.Model?.Has("thumbstick") == true ? profile.Thumbstick : ThumbstickMode.Analog;
                 var inputControls = device.InputControls;
@@ -923,7 +965,8 @@ public sealed class DeviceManager : IDisposable
                     if (!inputControls.Contains(SourceKeys.WheelUp) && !inputControls.Contains(SourceKeys.WheelDown))
                         scrollLines = 1;
                 }
-                if (!bindingsAvailable && !shortcut && scrollLines <= 1 && stick == ThumbstickMode.Analog)
+                bool managedDpi = device.CanReadNagaDpi && device.Control != null && profile.Performance is { ManagedDpiSteps: true };
+                if (!managedDpi && !bindingsAvailable && !shortcut && scrollLines <= 1 && stick == ThumbstickMode.Analog)
                 {
                     if (device.Session != null)
                     {
@@ -936,19 +979,23 @@ public sealed class DeviceManager : IDisposable
                     .Any(binding => matches(binding.Key) && binding.Value is not DefaultBinding) ||
                     _shortcuts.Shortcuts.Any(s => s.Keys.Any(matches) &&
                         ShortcutMatchesControls(device.Model, inputControls, device.InputControlsStatus, s.Keys));
-                bool nativeMacros = device.CanReadNativeMacros && UsesControl(LegacyRemapControls.IsMacroSource);
+                bool nativeMacros = device.CanReadNativeMacros && device.NativeMacroProblem == null && UsesControl(LegacyRemapControls.IsMacroSource);
                 bool nativeNagaTilt = device.CanReadNativeNagaTilt && UsesControl(LegacyRemapControls.IsNagaTiltSource);
-                bool nativeNagaDpi = device.CanReadNativeNagaDpi && UsesControl(LegacyRemapControls.IsNagaDpiSource);
-                if (device.Session != null && device.SessionStick == stick && device.Session.HasNativeMacroKeys == nativeMacros &&
-                    device.Session.HasNativeNagaTilt == nativeNagaTilt && device.Session.HasNativeNagaDpi == nativeNagaDpi)
+                bool nativeNagaDpi = device.CanReadNativeNagaDpi && (managedDpi || UsesControl(LegacyRemapControls.IsNagaDpiSource));
+                if (device.Session is { } session && device.SessionStick == stick && session.HasNativeMacroKeys == nativeMacros &&
+                    session.HasNativeNagaTilt == nativeNagaTilt && session.HasNativeNagaDpi == nativeNagaDpi)
                 {
                     try
                     {
-                        UpdateSession(device.Session, keymap, profile.Interruption, scrollLines, refreshing);
+                        session.WithEngine(engine =>
+                        {
+                            try { UpdateSession(session, keymap, profile.Interruption, scrollLines, refreshing); }
+                            finally { ConfigureNagaInput(engine, device, profile, managedDpi, nativeNagaTilt); }
+                        });
                         if (!refreshing && device.InputProblem?.StartsWith("Could not update the device's keys: ", StringComparison.Ordinal) == true)
                         {
                             bool recovered = false;
-                            device.Session.WithEngine(engine => recovered = engine.TryConfirmOutputRecovery());
+                            session.WithEngine(engine => recovered = engine.TryConfirmOutputRecovery());
                             if (recovered)
                             {
                                 device.InputProblem = null;
@@ -973,13 +1020,14 @@ public sealed class DeviceManager : IDisposable
                     continue;
                 }
                 var model = device.Model;
-                device.Engine = new RemapEngine(output, new Host(this, key))
+                device.Engine = new RemapEngine(output, new Host(this, key), InputTimeProvider)
                 {
                     Keymap = keymap,
                     Defaults = source => DefaultFor(model, source),
                     Interruption = profile.Interruption,
                     ScrollLines = scrollLines,
                 };
+                ConfigureNagaInput(device.Engine, device, profile, managedDpi, nativeNagaTilt);
                 try
                 {
                     device.Session = StartInputSession(device.InputNodes, device.Engine, stick, (failed, path, error) =>
@@ -991,7 +1039,18 @@ public sealed class DeviceManager : IDisposable
                         }));
                     var watched = device;
                     if (nativeMacros)
-                        StartNativeMacroSession(device);
+                    {
+                        try { StartNativeMacroSession(device); }
+                        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ObjectDisposedException or ThreadStateException)
+                        {
+                            device.NativeMacroProblem = $"Could not start native macro keys: {error.Message}";
+                            try { device.Session.DetachNativeMacroKeys(); }
+                            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or ObjectDisposedException or ThreadStateException)
+                            {
+                                device.NativeMacroProblem += $" Could not clean up native macro mode: {cleanup.Message}";
+                            }
+                        }
+                    }
                     if (nativeNagaTilt || nativeNagaDpi)
                         StartNativeNagaSession(device, nativeNagaTilt, nativeNagaDpi);
                     device.Session.StickMoved += (x, y) => SendStick(watched, x, y);
@@ -1043,14 +1102,93 @@ public sealed class DeviceManager : IDisposable
         var slot = device.IsBasiliskUsb ? control.OnboardProfile : null;
         lock (_gate)
         {
-            if (device.Control != control || device.ControlProblem == outcome.Detail && device.OnboardProfile == slot)
+            if (device.Control != control || device.ControlProblem == outcome.Detail && device.OnboardProfile == slot &&
+                device.ManagedDpiRevision == control.ManagedDpiRevision)
                 return false;
             device.ControlProblem = outcome.Detail;
             device.OnboardProfile = slot;
+            device.ManagedDpiRevision = control.ManagedDpiRevision;
             if (slot is byte active && device.StableSerial is { } serial)
                 _basiliskSlots[serial] = active;
             return true;
         }
+    }
+
+    void ConfigureNagaInput(RemapEngine engine, Connected device, Profile profile, bool managedDpi, bool nativeTilt)
+    {
+        if (device.Bus != HidrawNode.UsbBus || device.ProductId != LegacyRemapControls.NagaChroma)
+            return;
+        engine.NativeNagaTilt = nativeTilt;
+        engine.NagaTiltReportsHorizontalWheel = device.NagaHasHorizontalWheel;
+        engine.NagaHorizontalHighResOnly = device.HorizontalHighResOnly;
+        engine.EvdevNagaTiltLeft = device.EvdevControls.Contains(LegacyRemapControls.NagaTiltLeft);
+        engine.EvdevNagaTiltRight = device.EvdevControls.Contains(LegacyRemapControls.NagaTiltRight);
+        var controls = device.InputControls;
+        engine.NagaTiltShortcutSources = _shortcuts.Shortcuts
+            .Where(shortcut => ShortcutMatchesControls(device.Model, controls, device.InputControlsStatus, shortcut.Keys))
+            .SelectMany(shortcut => shortcut.Keys.Where(LegacyRemapControls.IsNagaTiltSource)).ToHashSet();
+        if (!managedDpi || device.Control is not { } control || profile.Performance is not { } performance)
+        {
+            device.DpiContext = null;
+            engine.NagaDpiStep = null;
+            return;
+        }
+        var context = device.DpiContext;
+        if (context == null || context.Engine != engine || context.Control != control || context.Profile != profile.Id ||
+            !DeviceControl.SameDpiSteps(context.Performance, performance))
+            device.DpiContext = context = new(engine, control, profile.Id, performance);
+        engine.NagaDpiStep = source => QueueNagaDpiStep(device, context, source == LegacyRemapControls.NagaDpiUp ? 1 : -1);
+    }
+
+    void QueueNagaDpiStep(Connected device, NagaDpiContext context, int direction)
+    {
+        lock (device.DpiQueueGate)
+        {
+            var previous = device.DpiQueue;
+            device.DpiQueue = Task.Run(async () =>
+            {
+                try { await previous.ConfigureAwait(false); }
+                catch (Exception error) { Console.Error.WriteLine(error); }
+                lock (ApplyGate(device.Key))
+                {
+                    lock (_gate)
+                        if (_disposed || _devices.GetValueOrDefault(device.Port) != device || device.Engine != context.Engine ||
+                            device.Control != context.Control || !ReferenceEquals(device.DpiContext, context))
+                            return;
+                    if (!context.Control.StepManagedDpi(context.Profile, context.Performance, direction))
+                        return;
+                    lock (_gate)
+                    {
+                        if (device.Control != context.Control)
+                            return;
+                        device.ManagedDpiRevision = context.Control.ManagedDpiRevision;
+                    }
+                }
+                DevicesChanged?.Invoke();
+            });
+        }
+    }
+
+    internal DeviceState SelectManagedDpiStep(string key, string port, string product, string serial, Guid profile, int step, DpiStage expected)
+    {
+        DeviceState state;
+        lock (_refreshGate)
+        lock (ApplyGate(key))
+        {
+            Connected? device;
+            lock (_gate)
+                device = _devices.GetValueOrDefault(port);
+            if (_disposed || device == null || device.Suppressed || device.Key != key || device.ProductKey != product ||
+                (device.Identity?.Serial ?? "") != serial || device.Control is not { } control)
+                throw new InvalidOperationException("The selected mouse is no longer available.");
+            if (!control.SelectManagedDpi(profile, step, expected))
+                throw new InvalidOperationException("The DPI profile changed. Review the steps before selecting one again.");
+            lock (_gate)
+                device.ManagedDpiRevision = control.ManagedDpiRevision;
+            state = control.ReadState();
+        }
+        DevicesChanged?.Invoke();
+        return state;
     }
 
     internal UnitApplyOutcome RetryUnitApply(string key, string port, string productId, string serial)
@@ -1083,7 +1221,7 @@ public sealed class DeviceManager : IDisposable
         var reader = OpenNativeMacroKeys(path, (source, value) => session.DispatchNativeMacroKey(path, source, value),
             error => ThreadPool.QueueUserWorkItem(_ =>
             {
-                if (RetireFailedSession(device, session, path, error))
+                if (RetireFailedSession(device, session, path, error, nativeMacro: true))
                     DevicesChanged?.Invoke();
             }));
         IDisposable? mode = null;
@@ -1148,12 +1286,13 @@ public sealed class DeviceManager : IDisposable
          problem.StartsWith("Could not update the device's keys: ", StringComparison.Ordinal) ||
          problem.StartsWith("No input nodes are available.", StringComparison.Ordinal));
 
-    bool RetireFailedSession(Connected device, DeviceSession failed, string path, Exception error)
+    bool RetireFailedSession(Connected device, DeviceSession failed, string path, Exception error, bool nativeMacro = false)
     {
         lock (_gate)
         {
             // A delayed notification must not stop a replacement session or a reconnected device.
-            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Session != failed)
+            if (!_devices.TryGetValue(device.Port, out var current) || current != device || device.Session != failed ||
+                nativeMacro && !failed.HasNativeMacroKeys)
                 return false;
             StopSession(device);
             device.InputFailed = true;

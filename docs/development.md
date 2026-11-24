@@ -33,19 +33,24 @@ Tests that write settings to a plugged-in device require `VIPER_HARDWARE_TESTS=1
 
 ### Private desktop smoke test
 
-Install Xvfb, xauth, a session D-Bus daemon and DejaVu fonts, then run:
+Install .NET 10, Xvfb, xauth, xdotool, D-Bus, AT-SPI (`at-spi2-core`), Fontconfig (`fc-cache`), and DejaVu fonts, then run:
 
 ```sh
 tests/desktop-smoke/run.sh
 ```
 
-The script starts a new X server and session bus with temporary app state. It uses a native Avalonia window and a daemon with emulated devices. It checks navigation at the minimum width and 150% scaling, direct access to an affected unit's Health page, save failure and retry, keyboard activation of the remap and per-key lighting controls, and unplugging during an uncommitted edit. Keyboard actions are synthesized as Avalonia events. The headless suite covers additional behavior and protocol failures.
+The script starts a new X server and session bus with temporary app state. It builds a private Fontconfig cache from the installed fonts before opening the window. It uses a native Avalonia window and a daemon with emulated devices. It checks navigation at the minimum width and 150% scaling, direct access to an affected unit's Health page, save failure and retry, keyboard activation of the remap and per-key lighting controls, and unplugging during an uncommitted edit. The remap walkthrough sends native X11 keyboard input to check Tab traversal, visible focus, retry, and focus return. The headless suite covers additional behavior and protocol failures.
 
 The smoke test reports page-switch time and managed allocation samples for synchronous device drawing. Compare samples on the same machine and configuration before using them to evaluate a rendering change. The runner also accepts build flags such as an offline restore configuration and a `DOTNET` SDK path override.
 
+To capture the tested states, install ImageMagick and set `VIPER_DESKTOP_SMOKE_ARTIFACTS` to an absolute output directory.
+For a crash during startup, set `VIPER_DESKTOP_SMOKE_BACKTRACE=1` to launch the same fixture with GDB inside its private display and D-Bus session. Use the regular invocation to check for startup failures that only reproduce outside GDB.
+
+The private X server has no X session manager. Avalonia 12.1.3 may log `SESSION_MANAGER environment variable not defined` during startup. The fixture exercises keyboard focus directly on the private display. It does not require a desktop session or access to a user's accessibility bus.
+
 ### Release packages
 
-`packaging/build-release.sh` builds the self-contained Linux x64 tarball and Debian package under `packaging/out`. Set `VIPER_OUT` to choose another output directory. The script builds in a fresh temporary directory and copies the two packages to the destination, where an existing package of the same version is replaced.
+`packaging/build-release.sh` builds the self-contained Linux x64 tarball and Debian package under `packaging/out`. It uses the version in `Directory.Build.props`, including its prerelease suffix. Set `VIPER_VERSION` to override the version and `VIPER_OUT` to choose another output directory. The script builds in a fresh temporary directory and copies the two packages to the destination, where an existing package of the same version is replaced.
 
 Run `bash tests/packaging-release-safety.sh` to check that producing packages preserves existing files in the checkout and output directory. This check uses a temporary fixture and stub packaging tools.
 

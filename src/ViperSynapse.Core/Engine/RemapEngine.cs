@@ -40,6 +40,30 @@ public sealed class RemapEngine
     /// default for it, W for the stick's up, say. Null leaves it doing nothing.</summary>
     public Func<ushort, Binding?>? Defaults { get; set; }
 
+    public Action<ushort>? NagaDpiStep { get; set; }
+    public bool NativeNagaTilt { get; set; }
+    public bool NagaTiltReportsHorizontalWheel { get; set; }
+    public bool NagaHorizontalHighResOnly { get; set; }
+    public bool EvdevNagaTiltLeft { get; set; }
+    public bool EvdevNagaTiltRight { get; set; }
+    public IReadOnlySet<ushort>? NagaTiltShortcutSources { get; set; }
+
+    public bool HasEvdevNagaTilt(ushort source) => source == LegacyRemapControls.NagaTiltLeft ? EvdevNagaTiltLeft : EvdevNagaTiltRight;
+
+    public bool HasNagaTiltAction(ushort source) => Keymap.Resolve(source, HypershiftActive) is not DefaultBinding ||
+        NagaTiltShortcutSources?.Contains(source) == true;
+
+    public void NagaTiltDetent(ushort source)
+    {
+        if (Keymap.Resolve(source, HypershiftActive) is DefaultBinding && _host.Shortcuts.Completed(source, _held.ContainsKey) == null)
+        {
+            Scroll(RelativeAxes.HWheel, (source == LegacyRemapControls.NagaTiltLeft ? -1 : 1) * Math.Max(1, ScrollLines));
+            return;
+        }
+        Key(source, 1);
+        Key(source, 0);
+    }
+
     /// <summary>Any key press stops running macros (Synapse's "Macro and Keystroke Interruption: any key").</summary>
     public MacroInterruption Interruption { get; set; } = MacroInterruption.DedicatedKey;
 
@@ -84,9 +108,16 @@ public sealed class RemapEngine
             var binding = _host.Shortcuts.Completed(code, _held.ContainsKey)?.Binding ?? Keymap.Resolve(code, HypershiftActive);
             if (binding is DefaultBinding && SourceKeys.IsStick(code))
                 binding = Defaults?.Invoke(code) ?? new DisableBinding();
+            if (binding is DefaultBinding && LegacyRemapControls.IsNagaTiltSource(code) &&
+                (NativeNagaTilt || NagaTiltReportsHorizontalWheel && HasEvdevNagaTilt(code)))
+                binding = NagaTiltReportsHorizontalWheel ? new DisableBinding() : new MouseBinding(
+                    code == LegacyRemapControls.NagaTiltLeft ? MouseFunction.ScrollLeft : MouseFunction.ScrollRight);
             // The Naga's vendor DPI buttons have no default virtual input event.
             if (binding is DefaultBinding && LegacyRemapControls.IsNagaDpiSource(code))
+            {
+                NagaDpiStep?.Invoke(code);
                 binding = new DisableBinding();
+            }
             var owner = _sink.CreateOwner();
             _held[code] = binding;
             _owners[code] = owner;
@@ -122,12 +153,34 @@ public sealed class RemapEngine
     /// <summary>Wheel movement: each direction is a control of its own and can be rebound.</summary>
     public void Wheel(ushort axis, int value)
     {
+        if (value == 0)
+            return;
         bool horizontal = axis is RelativeAxes.HWheel or RelativeAxes.HWheelHiRes;
         bool hiRes = axis is RelativeAxes.WheelHiRes or RelativeAxes.HWheelHiRes;
         ushort source = horizontal
             ? value > 0 ? SourceKeys.WheelRight : SourceKeys.WheelLeft
             : value > 0 ? SourceKeys.WheelUp : SourceKeys.WheelDown;
         var binding = Keymap.Resolve(source, HypershiftActive);
+        if (horizontal && (NativeNagaTilt || NagaTiltReportsHorizontalWheel))
+        {
+            ushort tilt = value > 0 ? LegacyRemapControls.NagaTiltRight : LegacyRemapControls.NagaTiltLeft;
+            if (NativeNagaTilt || HasEvdevNagaTilt(tilt))
+            {
+                if (!NagaTiltReportsHorizontalWheel || Keymap.Resolve(tilt, HypershiftActive) is not DefaultBinding ||
+                    NagaTiltShortcutSources?.Contains(tilt) == true)
+                    return;
+            }
+            else if (Keymap.Resolve(tilt, HypershiftActive) is not DefaultBinding || _host.Shortcuts.Completed(tilt, _held.ContainsKey) != null)
+            {
+                if (!hiRes)
+                    for (long i = 0; i < Math.Abs((long)value); i++)
+                    {
+                        Key(tilt, 1);
+                        Key(tilt, 0);
+                    }
+                return;
+            }
+        }
         if (binding is DefaultBinding)
         {
             _sink.Relative(axis, value * Math.Max(1, ScrollLines));

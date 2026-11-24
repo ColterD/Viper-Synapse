@@ -58,4 +58,16 @@ for name in App Service Cli Hardware Core; do
 done
 test -f "$destination/ViperSynapse-0.1.2-rc.3-linux-x64.tar.gz"
 test "$(cat "$destination/viper-synapse_0.1.2-rc.3_amd64.deb")" = "0.1.2~rc.3"
+
+cat > "$project/Directory.Build.props" <<'PROPS'
+<Project>
+  <PropertyGroup>
+    <VersionPrefix>0.1.2</VersionPrefix>
+    <VersionSuffix>rc.4</VersionSuffix>
+  </PropertyGroup>
+</Project>
+PROPS
+env -u VIPER_VERSION PATH="$fake:$PATH" VIPER_OUT="$scratch/output" bash "$project/packaging/build-release.sh"
+test -f "$destination/ViperSynapse-0.1.2-rc.4-linux-x64.tar.gz"
+test "$(cat "$destination/viper-synapse_0.1.2-rc.4_amd64.deb")" = "0.1.2~rc.4"
 test -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -print -quit)"
